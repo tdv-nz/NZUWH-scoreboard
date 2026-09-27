@@ -10,9 +10,9 @@ Organisers can record rosters, attendance and scorers. The public sees published
 
 ## First setup with Cloudflare
 
-1. Run `npm install`. Install Wrangler with `npm install --save-dev wrangler` if it is not already available, then run `npx wrangler login`.
+1. Install dependencies with `NODE_USE_SYSTEM_CA=1 npm_config_registry=https://registry.npmjs.org npm install`, then run `NODE_USE_SYSTEM_CA=1 npx wrangler login`. Wrangler is included as a development dependency. The system CA setting lets Node trust certificates already trusted by macOS; TLS verification remains enabled.
 2. The separate `nzuwh-championships` D1 database ID is configured in `wrangler.jsonc`. Keep this binding pointed at the championships database, never the Auckland database.
-3. Run `npm run db:migrate:remote` to create the tables. For a local database, run `npm run db:migrate:local`.
+3. Run `NODE_USE_SYSTEM_CA=1 npm run db:migrate:remote` to create the tables. For a local database, run `npm run db:migrate:local`.
 4. Create the first admin account. In a regular Terminal, run:
 
    ```sh
@@ -20,7 +20,7 @@ Organisers can record rosters, attendance and scorers. The public sees published
    printf '\n'
    printf '%s\n' "$NZUWH_ADMIN_PASSWORD" | node scripts/create-admin.mjs you@example.com
    unset NZUWH_ADMIN_PASSWORD
-   npx wrangler d1 execute nzuwh-championships --remote --file=.admin-bootstrap.sql
+   NODE_USE_SYSTEM_CA=1 npx wrangler d1 execute nzuwh-championships --remote --file=.admin-bootstrap.sql
    rm .admin-bootstrap.sql
    ```
 
