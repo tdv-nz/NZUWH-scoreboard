@@ -7,7 +7,7 @@
     {
       "binding": "DB",
       "database_name": "nzuwh-championships",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "4c609d44-f255-41a3-bea4-f04c6a08a1ea",
       "migrations_dir": "migrations"
     }
   ],

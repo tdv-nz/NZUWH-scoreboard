@@ -11,7 +11,7 @@ Organisers can record rosters, attendance and scorers. The public sees published
 ## First setup with Cloudflare
 
 1. Run `npm install`. Install Wrangler with `npm install --save-dev wrangler` if it is not already available, then run `npx wrangler login`.
-2. Create a **new, empty** D1 database with `npx wrangler d1 create nzuwh-championships`. Do not use the Auckland database. Copy the returned `database_id` into `wrangler.jsonc` in place of the all-zero placeholder.
+2. The separate `nzuwh-championships` D1 database ID is configured in `wrangler.jsonc`. Keep this binding pointed at the championships database, never the Auckland database.
 3. Run `npm run db:migrate:remote` to create the tables. For a local database, run `npm run db:migrate:local`.
 4. Create the first admin account. In a regular Terminal, run:
 
