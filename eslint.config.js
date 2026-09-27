@@ -5,10 +5,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  // Supabase's local runtime bundle is generated, minified code rather than
-  // application source. Linting it makes `npm run lint` fail on code we do
-  // not maintain.
-  { ignores: ["dist", "supabase/.temp/**"] },
+  { ignores: ["dist", ".wrangler/**"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
@@ -27,9 +24,6 @@ export default tseslint.config(
         { allowConstantExport: true },
       ],
       "@typescript-eslint/no-unused-vars": "off",
-      // The existing Supabase query layer deliberately uses `any` at its
-      // database boundary. Keep lint useful for the rest of the codebase
-      // while those call sites are migrated to generated types.
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-empty-object-type": "off",
       "@typescript-eslint/no-require-imports": "off",
