@@ -1,41 +1,34 @@
-# New Zealand Underwater Hockey Championships
+# NZ Underwater Hockey Championships
 
-Independent tournament tracker for school, regional and club championships. It has fresh Git history, a separate database schema, and no Auckland players, teams, accounts or results.
+Tournament tracker for school, regional and club championships. This repository uses its own Cloudflare D1 database and organiser accounts. It contains no Auckland competition data or account records.
 
-## Current workflow
+## Tournament workflow
 
-- Create a multi-day tournament in one setup flow: name and dates, number of courts, school/regional/club divisions, teams and pool assignments. Every team is linked to a reusable school, region, or club; multiple teams across grades can share one organisation.
-- Choose one or two pools, a single or double round robin, and a finals format separately for each division before saving. The event, divisions and teams are written in one database transaction. Generate the pool fixtures when ready.
-- Set dates, times, courts and referees for each game. Record scores and view pool standings. Print or export a combined schedule across all divisions.
-- After all pool games are complete, generate the selected finals format: no finals, top-two final, top-four semi-finals and final, two-pool crossover quarter-finals and semi-finals, or custom fixtures. The crossover option follows the supplied 2026 club draw. Winners and losers feed later matches automatically. Add other placing games individually.
-- Organisers can enter private team rosters, match attendance and goal scorers. Public users see published and completed tournaments; only an admin can edit.
+Create a multi-day event with a court count, divisions, and teams. Each team belongs to a reusable school, region, or club. Divisions can use one or two pools, single or double round robin, and no finals, top-two, top-four, two-pool crossover, or custom finals. After saving, generate pool games, add times and courts, record results, then generate finals and placing games. The crossover option follows the supplied 2026 club draw. Winners and losers advance into linked fixtures.
 
-The draw generator sets an initial date and distributes fixtures across the configured court names, but **does not allocate times**. Dates, court assignments and times must be checked against the actual tournament timetable. Pool rankings use points, goal difference, then goals scored. Tied knockout matches need an explicit winner before the next game can populate; shootout handling still needs defining. Player rosters and match attendance are available to signed-in organisers; public pages do not expose player names. More detailed player reports are still to be built.
+Organisers can record rosters, attendance and scorers. The public sees published or completed events, schedules and results, without player rosters. Admins manage tournaments and accounts; scorers can record scores, attendance and goals. Organiser passwords are hashed in D1. The draw generator provides starting dates and court names, but **times need to be scheduled by an organiser**. Knockout matches require a decisive score; shootout handling has not yet been specified.
 
-## Separate Supabase project
+## First setup with Cloudflare
 
-1. Create a **new** Supabase project. Never link this repository to the Auckland project.
-2. Run the files in `supabase/migrations/` in filename order in the new project's SQL editor. The first migration creates empty tables and row security policies; the second adds court and finals settings plus atomic tournament creation; the third adds reusable school, region, and club records and links existing named teams.
-3. Create an organiser in that new project's Authentication > Users page.
-4. In the new project's SQL editor, give that account the admin role, replacing the email:
+1. Run `npm install`. Install Wrangler with `npm install --save-dev wrangler` if it is not already available, then run `npx wrangler login`.
+2. Create a **new, empty** D1 database with `npx wrangler d1 create nzuwh-championships`. Do not use the Auckland database. Copy the returned `database_id` into `wrangler.jsonc` in place of the all-zero placeholder.
+3. Run `npm run db:migrate:remote` to create the tables. For a local database, run `npm run db:migrate:local`.
+4. Create the first admin account. In a regular Terminal, run:
 
-   ```sql
-   insert into public.user_roles (user_id, role)
-   select id, 'admin' from auth.users where email = 'organiser@example.com';
+   ```sh
+   read -s 'NZUWH_ADMIN_PASSWORD?New admin password (12+ characters): '
+   printf '\n'
+   printf '%s\n' "$NZUWH_ADMIN_PASSWORD" | node scripts/create-admin.mjs you@example.com
+   unset NZUWH_ADMIN_PASSWORD
+   npx wrangler d1 execute nzuwh-championships --remote --file=.admin-bootstrap.sql
+   rm .admin-bootstrap.sql
    ```
 
-5. Copy `.env.example` to `.env.local`; fill it with **the new project's** URL and publishable key. Never use a service-role key in a `VITE_` variable.
-6. Run `npm install` and `npm run dev` for local use. Add the same two environment variables to the separate hosting project when deploying.
+   The generated SQL file contains a password hash, is ignored by Git, and should be removed after use. Use `--local` instead of `--remote` if bootstrapping a local database.
+5. Run `npm run dev` to build and run the Worker with the local D1 database. Sign in with the account above. Create other admin or scorer accounts in **Account settings**. `npm run deploy` builds and deploys the Worker and static app together after the remote migration is applied.
 
-The app refuses to connect to the known Auckland Supabase URL. No credentials or database data are included in this repository.
+No Supabase URL, key, or project is used. Published data is available without sign-in; all writes use the Worker API and D1 binding. Password and session cookies are never put in browser local storage. Sessions expire after seven days, and signing out removes the server-side session.
 
-## GitHub handoff
+## Checks
 
-Create an empty GitHub repository named `nz-uwh-championships`, then from this directory run:
-
-```sh
-git remote add origin <new-repository-url>
-git push -u origin main
-```
-
-This repository must never share a Supabase project or deployment environment with the Auckland tracker.
+`npm test` runs a SQLite-backed Worker integration test for authentication, tournament creation, privacy, fixtures and result advancement. `npm run build` verifies the React app. Remote D1 and deployment still need an end-to-end check after the Cloudflare account is connected.

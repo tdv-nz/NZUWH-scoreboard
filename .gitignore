@@ -29,3 +29,7 @@ dist-ssr
 .env.*
 !.env.example
 supabase/.temp/
+
+# Contains a password hash for the first organiser
+.admin-bootstrap.sql
+.wrangler/
