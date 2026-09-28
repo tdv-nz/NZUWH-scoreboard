@@ -9,16 +9,16 @@ This plan compares the supplied build prompt with the code in this repository. T
 - A single-page setup form that creates a Draft tournament, divisions, and teams in a D1 batch. It validates pool sizes, division team names, and the supported finals formats.
 - A four-step setup wizard that saves named courts, reusable team identities, tournament-specific team colours, playing-day windows, breaks, court availability, schedule defaults, per-division court rules, and the goal-scorer setting.
 - Draft-only court-rule editing and a migration that adds the new records while retaining existing entries, colours, fixture court labels, and dates.
-- Single and double round-robin fixture generation, editable fixtures, basic seeded finals, result entry, winner/loser links for some knockout games, standings, and combined schedule print/CSV export.
+- Single and double round-robin fixture generation, tournament-wide slot assignment using saved court/day rules, unscheduled reasons and fallback notes, guarded manual schedule edits, basic seeded finals, result entry, winner/loser links for some knockout games, standings, and combined schedule print/CSV export.
 - Worker-side role checks, same-origin write checks, PBKDF2 password hashing, hashed session tokens, HTTP-only SameSite cookies, seven-day sessions, password changes, and public filtering of Draft events.
 - A small SQLite-backed Worker integration suite and setup notes in the README.
 
-The main implementation is in [src/App.tsx](src/App.tsx), [src/TournamentSetup.tsx](src/TournamentSetup.tsx), [worker/index.ts](worker/index.ts), [worker/auth.ts](worker/auth.ts), and [migrations/0001_initial.sql](migrations/0001_initial.sql). The README explicitly says game times are assigned manually.
+The main implementation is in [src/App.tsx](src/App.tsx), [src/TournamentSetup.tsx](src/TournamentSetup.tsx), [worker/index.ts](worker/index.ts), [worker/schedule.ts](worker/schedule.ts), [worker/auth.ts](worker/auth.ts), and the migrations.
 
 ## Main gaps against the prompt
 
 1. **Tournament setup and storage:** the initial creation/storage gap is addressed by the new wizard and D1 migration. Playing-day and court availability can be entered during setup; only division court rules have a post-creation editor, and that editor is available while the event remains Draft. An admin editor for changing the other setup settings after creation is still needed.
-2. **Scheduling:** the draw generator pairs teams and places fixtures on a start date, but it does not find valid time slots. There are no breaks, day-specific hours, turnaround checks, required/preferred court rules, conflict explanations, fallback indicators, schedule summary, or validation when an admin edits a fixture.
+2. **Scheduling:** the core generator and manual slot validation are now implemented. Still useful: add schedule filters and a dedicated editor for bulk adjustments.
 3. **Rosters and scoring:** the current model has match-level attendance, and goal entry requires a player to be marked present for that match. The prompt defines the tournament roster itself as attendance and explicitly removes that match-level prerequisite. The UI cannot reuse or remove a roster entry, record an unattributed goal, enforce goals against the final score, or hide all goal controls when scoring is disabled.
 4. **Scoring workflow and roles:** scores are edited inside the draw list; there is no focused poolside scoring route, match lookup/filter workflow, in-progress action, completed-result confirmation, or explicit offline/loading feedback. The API gives Scorers score permissions, but goal APIs do not yet enforce the tournament scoring setting and the bootstrap response loads broad private data for every signed-in role.
 5. **Finals and standings:** top-two, top-four, and crossover generation are partial. Pool seeds are resolved to teams at generation time, so later pool-result corrections cannot reseed them. Downstream completed-game conflicts are neither reported nor resolved for the organiser. The close-loss points column is stored but not used in standings; point values are not configurable in the UI.
@@ -27,7 +27,7 @@ The main implementation is in [src/App.tsx](src/App.tsx), [src/TournamentSetup.t
 
 ## Build order
 
-The first implementation slice covers the D1 structures, atomic setup persistence, guided setup, reusable team identities, and Draft-only division court-rule editing. The schedule engine remains separate and is the next major dependency.
+The first implementation slice covers the D1 structures, atomic setup persistence, guided setup, reusable team identities, and Draft-only division court-rule editing. The next completed slice adds schedule generation and guarded manual slot edits.
 
 ### 1. Lock down the domain model and migrate D1
 
@@ -45,9 +45,9 @@ Turn setup into a guided flow: event details, named courts, divisions and teams,
 
 ### 3. Build the schedule engine and safe manual editing
 
-Keep round-robin pairing as a distinct step, then schedule all generated fixtures against the configured days, time windows, breaks, court availability, durations, and turnaround limits. Place required-court divisions first, respect preference order, mark permitted fallbacks, avoid consecutive games for a team when possible, and spread play across days. Return an explanation for every unscheduled game and a summary of placements and conflicts. Use the same validator for manual edits; reject prohibited courts and clashes, and explain turnaround or preference warnings before saving.
+Keep round-robin pairing as a distinct step, then schedule all generated fixtures against the configured days, time windows, breaks, court availability, durations (including halftime), and turnaround limits. Place required-court divisions first, respect preference order, mark permitted fallbacks, avoid consecutive games for a team when possible, and spread play across days. Return an explanation for every unscheduled game and a summary of placements and conflicts. Use the same validator for manual edits; reject prohibited courts and clashes, and explain turnaround or preference warnings before saving. Regeneration is blocked once a match starts or has a result.
 
-**Done when:** generation never breaks a required-court, court-availability, court-time, or turnaround rule; unscheduled games remain visible with actionable reasons; regenerating is allowed only before results exist.
+**Done when:** generation never breaks a required-court, court-availability, court-time, or turnaround rule; unscheduled games remain visible with actionable reasons; regenerating is allowed only before results exist. Implemented in `worker/schedule.ts`, `POST /api/tournaments/:id/schedule/generate`, and the Schedule and Draw views.
 
 ### 4. Complete finals and advancement
 
