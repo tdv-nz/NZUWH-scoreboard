@@ -36,9 +36,11 @@ const db = {
 const env = { DB: db, ASSETS: { fetch: async () => new Response('asset') } };
 const email = 'admin@example.com'; const password = 'very-long-admin-password';
 const salt = randomBytes(16).toString('hex');
-const hash = pbkdf2Sync(password, Buffer.from(salt, 'hex'), 220000, 32, 'sha512').toString('hex');
+let hash = Buffer.from(password);
+for (let pass = 0; pass < 3; pass++) hash = pbkdf2Sync(hash, Buffer.from(salt, 'hex'), 100000, 32, 'sha512');
+hash = hash.toString('hex');
 database.prepare('INSERT INTO organisers (id,email,role,password_salt,password_hash,password_iterations) VALUES (?,?,?,?,?,?)')
-  .run(randomUUID(), email, 'admin', salt, hash, 220000);
+  .run(randomUUID(), email, 'admin', salt, hash, 300000);
 let cookie = '';
 async function call(path, method = 'GET', value, authenticated = true) {
   const headers = { Origin: 'https://scoreboard.test' };
@@ -156,7 +158,7 @@ test('returning team identities are reused with event-specific colours', async (
 
 test('scorer can record results but cannot change event structure', async () => {
   database.prepare('INSERT INTO organisers (id,email,role,password_salt,password_hash,password_iterations) VALUES (?,?,?,?,?,?)')
-    .run(randomUUID(), 'scorer@example.com', 'scorer', salt, hash, 220000);
+    .run(randomUUID(), 'scorer@example.com', 'scorer', salt, hash, 300000);
   const adminCookie = cookie;
   const signIn = await call('login', 'POST', { email: 'scorer@example.com', password });
   assert.equal(signIn.status, 200);

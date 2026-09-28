@@ -16,10 +16,12 @@ if (password.length < 12 || password.length > 256) {
 }
 
 const salt = randomBytes(16).toString('hex');
-const hash = pbkdf2Sync(password, Buffer.from(salt, 'hex'), 220_000, 32, 'sha512').toString('hex');
+let hash = Buffer.from(password);
+for (let pass = 0; pass < 3; pass++) hash = pbkdf2Sync(hash, Buffer.from(salt, 'hex'), 100_000, 32, 'sha512');
+hash = hash.toString('hex');
 const sqlEmail = email.replaceAll("'", "''");
 const sql = `DELETE FROM sessions WHERE organiser_id = (SELECT id FROM organisers WHERE email = '${sqlEmail}' AND role = 'admin');
-UPDATE organisers SET password_salt = '${salt}', password_hash = '${hash}', password_iterations = 220000,
+UPDATE organisers SET password_salt = '${salt}', password_hash = '${hash}', password_iterations = 300000,
   failed_logins = 0, locked_until = NULL WHERE email = '${sqlEmail}' AND role = 'admin';
 SELECT changes() AS reset_admin_count;
 `;

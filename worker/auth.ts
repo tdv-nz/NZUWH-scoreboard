@@ -1,16 +1,34 @@
 import { ApiError, json, requireChoice, requireText, type Env, type Viewer } from './types';
 
 const COOKIE = 'nzuwh_session';
-export const PASSWORD_ITERATIONS = 220_000;
+// Cloudflare Workers limits each Web Crypto PBKDF2 operation to 100,000 iterations.
+// Store the total so password records still describe the work factor used.
+export const PASSWORD_ITERATIONS = 300_000;
+const PBKDF2_ITERATIONS_PER_PASS = 100_000;
 const SESSION_SECONDS = 7 * 24 * 60 * 60;
 const bytesToHex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
 const hexToBytes = (hex: string) => new Uint8Array(hex.match(/.{2}/g)?.map(part => parseInt(part, 16)) || []);
 const randomHex = (length: number) => bytesToHex(crypto.getRandomValues(new Uint8Array(length)));
 
 export async function passwordHash(password: string, saltHex: string, iterations = PASSWORD_ITERATIONS): Promise<string> {
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-512', salt: hexToBytes(saltHex), iterations }, key, 256);
-  return bytesToHex(new Uint8Array(bits));
+  // Legacy single-pass hashes remain verifiable when their count fits the runtime cap.
+  // New hashes use three chained passes because one 300,000-iteration operation is unsupported.
+  if (iterations <= PBKDF2_ITERATIONS_PER_PASS) {
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-512', salt: hexToBytes(saltHex), iterations }, key, 256);
+    return bytesToHex(new Uint8Array(bits));
+  }
+  if (iterations !== PASSWORD_ITERATIONS) throw new ApiError(401, 'Invalid email or password');
+
+  let input = new TextEncoder().encode(password);
+  for (let pass = 0; pass < 3; pass++) {
+    const key = await crypto.subtle.importKey('raw', input, 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({
+      name: 'PBKDF2', hash: 'SHA-512', salt: hexToBytes(saltHex), iterations: PBKDF2_ITERATIONS_PER_PASS,
+    }, key, 256);
+    input = new Uint8Array(bits);
+  }
+  return bytesToHex(input);
 }
 export async function newPassword(password: unknown): Promise<{ salt: string; hash: string; iterations: number }> {
   if (typeof password !== 'string' || password.length < 12 || password.length > 256) throw new ApiError(400, 'Password must be 12–256 characters');
