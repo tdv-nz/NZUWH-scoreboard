@@ -4,15 +4,17 @@ Tournament tracker for school, regional and club championships. This repository 
 
 ## Tournament workflow
 
-Create a multi-day event with a court count, divisions, and teams. Each team belongs to a reusable school, region, or club. Divisions can use one or two pools, single or double round robin, and no finals, top-two, top-four, two-pool crossover, or custom finals. After saving, generate pool games, add times and courts, record results, then generate finals and placing games. The crossover option follows the supplied 2026 club draw. Winners and losers advance into linked fixtures.
+Create a multi-day event with named courts, divisions, teams, and schedule defaults. The guided setup saves playing-day hours, breaks, court availability, court rules for each division, team colours, and whether individual goal scorers will be recorded. Each team belongs to a reusable school, region, or club; returning team identities are reused across tournaments while colours stay specific to each tournament entry. Admins can change a division's court rule while the tournament is Draft.
 
-Organisers can record rosters, attendance and scorers. The public sees published or completed events, schedules and results, without player rosters. Admins manage tournaments and accounts; scorers can record scores, attendance and goals. Organiser passwords are hashed in D1. The draw generator provides starting dates and court names, but **times need to be scheduled by an organiser**. Knockout matches require a decisive score; shootout handling has not yet been specified.
+Divisions can use one or two pools, single or double round robin, and no finals, top-two, top-four, two-pool crossover, or custom finals. After saving, generate pool games, add times and courts, record results, then generate finals and placing games. The crossover option follows the supplied 2026 club draw. Winners and losers advance into linked fixtures. The scheduling settings are persisted for the next scheduling-engine step; the current draw generator still needs an organiser to assign fixture times and courts.
+
+Organisers can record rosters, attendance and scorers. The public sees published or completed events, schedules and results, without player rosters. Admins manage tournaments and accounts; scorers can record scores, attendance and goals. Organiser passwords are hashed in D1. Knockout matches require a decisive score; shootout handling has not yet been specified.
 
 ## First setup with Cloudflare
 
-1. Run `npm install`. Install Wrangler with `npm install --save-dev wrangler` if it is not already available, then run `npx wrangler login`.
-2. Create a **new, empty** D1 database with `npx wrangler d1 create nzuwh-championships`. Do not use the Auckland database. Copy the returned `database_id` into `wrangler.jsonc` in place of the all-zero placeholder.
-3. Run `npm run db:migrate:remote` to create the tables. For a local database, run `npm run db:migrate:local`.
+1. Install dependencies with `NODE_USE_SYSTEM_CA=1 npm_config_registry=https://registry.npmjs.org npm install`, then run `NODE_USE_SYSTEM_CA=1 npx wrangler login`. Wrangler is included as a development dependency. The system CA setting lets Node trust certificates already trusted by macOS; TLS verification remains enabled.
+2. The separate `nzuwh-championships` D1 database ID is configured in `wrangler.jsonc`. Keep this binding pointed at the championships database, never the Auckland database.
+3. Run `NODE_USE_SYSTEM_CA=1 npm run db:migrate:remote` to create the tables. For a local database, run `npm run db:migrate:local`.
 4. Create the first admin account. In a regular Terminal, run:
 
    ```sh
@@ -20,7 +22,7 @@ Organisers can record rosters, attendance and scorers. The public sees published
    printf '\n'
    printf '%s\n' "$NZUWH_ADMIN_PASSWORD" | node scripts/create-admin.mjs you@example.com
    unset NZUWH_ADMIN_PASSWORD
-   npx wrangler d1 execute nzuwh-championships --remote --file=.admin-bootstrap.sql
+   NODE_USE_SYSTEM_CA=1 npx wrangler d1 execute nzuwh-championships --remote --file=.admin-bootstrap.sql
    rm .admin-bootstrap.sql
    ```
 
@@ -31,4 +33,4 @@ No Supabase URL, key, or project is used. Published data is available without si
 
 ## Checks
 
-`npm test` runs a SQLite-backed Worker integration test for authentication, tournament creation, privacy, fixtures and result advancement. `npm run build` verifies the React app. Remote D1 and deployment still need an end-to-end check after the Cloudflare account is connected.
+`npm test` runs SQLite-backed Worker integration tests for authentication, public privacy, migration backfills, setup settings, court rules, team reuse, fixtures and result advancement. `npm run build` verifies the React app. Remote D1 and deployment still need an end-to-end check after the Cloudflare account is connected.
