@@ -134,6 +134,10 @@ export default function App() {
   const load = useCallback(async () => {
     try {
       const data = await api<Bootstrap>('bootstrap');
+      const collections: Array<keyof Bootstrap> = ['tournaments','divisions','teams','entries','matches','organisations','courts','tournament_days','day_breaks','schedule_settings','court_availability','division_court_rules','players','rosters','attendance','goals'];
+      if (!data || collections.some(key => !Array.isArray(data[key]))) {
+        throw new Error('The app loaded, but /api/bootstrap did not return app data. Configure the Cloudflare preview to route /api/* to the NZUWH Worker and its D1 database.');
+      }
       setSession(data.viewer); setIsAdmin(data.viewer?.role === 'admin');
       setTournaments(data.tournaments); setDivisions(data.divisions); setTeams(data.teams); setEntries(data.entries);
       setMatches(data.matches); setOrganisations(data.organisations); setPlayers(data.players);

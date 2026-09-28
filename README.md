@@ -29,6 +29,10 @@ Admins can generate a tournament-wide schedule from the saved playing days, cour
    The generated SQL file contains a password hash, is ignored by Git, and should be removed after use. Use `--local` instead of `--remote` if bootstrapping a local database.
 5. Run `npm run dev` to build and run the Worker with the local D1 database. Sign in with the account above. Create other admin or scorer accounts in **Account settings**. `npm run deploy` builds and deploys the Worker and static app together after the remote migration is applied.
 
+### Cloudflare Pages previews
+
+The primary deployment is a Worker with Static Assets. If this repository is also built as a Pages project, use `npm run build` with `dist` as the output directory; the `functions/api/[[path]].ts` adapter forwards `/api/*` requests to the same Worker API. Configure a `DB` D1 binding for both Preview and Production in the Pages project before redeploying. Use an isolated preview database if preview users may submit writes; the configured Worker database is the production database.
+
 No Supabase URL, key, or project is used. Published data is available without sign-in; all writes use the Worker API and D1 binding. Password and session cookies are never put in browser local storage. Sessions expire after seven days, and signing out removes the server-side session.
 
 ## Checks
