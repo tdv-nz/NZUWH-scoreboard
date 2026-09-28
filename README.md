@@ -31,7 +31,7 @@ Admins can generate a tournament-wide schedule from the saved playing days, cour
 
 ### Reset a forgotten admin password
 
-If you can sign in and know the current password, use **Account settings**. Otherwise, from a regular Terminal in the repository, generate a reset for the existing admin email and apply it to the remote D1 database:
+If another admin can sign in, open **Account settings → Organiser accounts**, enter a temporary password for the account, and select **Reset password**. The reset clears lockout and revokes that organiser's sessions; they can change the temporary password after signing in. If no admin can sign in, use the recovery script from a regular Terminal in the repository to generate a reset for the existing admin email and apply it to D1:
 
 ```sh
 read -s 'NZUWH_ADMIN_PASSWORD?New admin password (12+ characters): '

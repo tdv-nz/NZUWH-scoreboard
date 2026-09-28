@@ -99,6 +99,20 @@ export async function createOrganiser(env: Env, input: Record<string, unknown>):
     .bind(id, email, role, salt, hash, iterations).run();
   return json({ id, email, role }, 201);
 }
+export async function listOrganisers(env: Env): Promise<Response> {
+  const result = await env.DB.prepare('SELECT id, email, role, created_at FROM organisers ORDER BY email').all();
+  return json(result.results);
+}
+export async function resetOrganiserPassword(env: Env, organiserId: string, input: Record<string, unknown>): Promise<Response> {
+  const { salt, hash, iterations } = await newPassword(input.newPassword);
+  const result = await env.DB.batch([
+    env.DB.prepare('UPDATE organisers SET password_salt = ?, password_hash = ?, password_iterations = ?, failed_logins = 0, locked_until = NULL WHERE id = ?')
+      .bind(salt, hash, iterations, organiserId),
+    env.DB.prepare('DELETE FROM sessions WHERE organiser_id = ?').bind(organiserId),
+  ]);
+  if (!result[0]?.meta.changes) throw new ApiError(404, 'Organiser not found');
+  return json({ ok: true });
+}
 export async function changePassword(env: Env, user: Viewer, input: Record<string, unknown>): Promise<Response> {
   const current = input.currentPassword;
   if (typeof current !== 'string' || !current || current.length > 256) throw new ApiError(400, 'Current password is required');

@@ -1,5 +1,5 @@
 import { ApiError, body, json, requireChoice, requireInteger, requireText, sameOrigin, type BindValue, type Env, type Statement } from './types';
-import { changePassword, createOrganiser, login, logout, requireAdmin, viewer } from './auth';
+import { changePassword, createOrganiser, listOrganisers, login, logout, requireAdmin, resetOrganiserPassword, viewer } from './auth';
 import { generateSchedule, validateScheduleEdit } from './schedule';
 
 const id = () => crypto.randomUUID();
@@ -325,7 +325,13 @@ export default {
       if (request.method === 'POST' && path === '/api/logout') return await logout(request, env);
       if (!user) throw new ApiError(401, 'Sign in required');
       if (request.method === 'POST' && path === '/api/password') return await changePassword(env, user, await body(request));
+      if (request.method === 'GET' && path === '/api/users') { requireAdmin(user); return await listOrganisers(env); }
       if (request.method === 'POST' && path === '/api/users') { requireAdmin(user); return await createOrganiser(env, await body(request)); }
+      const organiserPassword = path.match(/^\/api\/users\/([0-9a-f-]+)\/password$/);
+      if (request.method === 'POST' && organiserPassword) {
+        requireAdmin(user);
+        return await resetOrganiserPassword(env, uuid(organiserPassword[1], 'organiser'), await body(request));
+      }
       if (request.method === 'POST' && path === '/api/attendance') {
         const input = await body(request);
         await q(env, 'INSERT OR IGNORE INTO match_attendance (match_id,player_id) VALUES (?,?)', uuid(input.match_id, 'match'), uuid(input.player_id, 'player')).run();

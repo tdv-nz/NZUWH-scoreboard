@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError, type Bootstrap, type Viewer } from './lib/api';
 import { createGroupDraw } from './lib/draw';
 import TournamentSetup, { type CourtAllocation, type Organisation, type TournamentDraft } from './TournamentSetup';
-import { CalendarDays, ClipboardList, Home, LogOut, Settings, Shield, Trophy, Users, Waves } from 'lucide-react';
+import { CalendarDays, ClipboardList, Home, LogIn, LogOut, Settings, Shield, Trophy, Users, Waves } from 'lucide-react';
 import './App.css';
 import './Scorer.css';
 
@@ -14,6 +14,7 @@ type Court = { id: string; tournament_id: string; display_name: string; display_
 type TournamentDay = { id: string; tournament_id: string; day_on: string; available: number; starts_at: string; ends_at: string };
 type DivisionCourtRule = { id: string; division_id: string; court_id: string; allocation_type: CourtAllocation; preference_order: number };
 type Player = { id: string; name: string };
+type OrganiserAccount = { id: string; email: string; role: 'admin' | 'scorer'; created_at: string };
 type Roster = { id: string; division_team_id: string; player_id: string };
 type Attendance = { match_id: string; player_id: string };
 type Goal = { id: string; match_id: string; player_id: string | null; division_team_id: string };
@@ -88,6 +89,8 @@ function standings(entries: Entry[], matches: Match[], division: Division) {
 export default function App() {
   const [session, setSession] = useState<Viewer | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [organisers, setOrganisers] = useState<OrganiserAccount[]>([]);
+  const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
   const [newOrganiser, setNewOrganiser] = useState({ email: '', password: '', role: 'scorer' });
   const [passwordChange, setPasswordChange] = useState({ currentPassword: '', newPassword: '' });
   const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
@@ -99,7 +102,7 @@ export default function App() {
   const [attendance, setAttendance] = useState<Attendance[]>([]); const [goals, setGoals] = useState<Goal[]>([]);
   const [selectedTournament, setSelectedTournament] = useState(''); const [selectedDivision, setSelectedDivision] = useState('');
   const [tab, setTab] = useState<'overview' | 'teams' | 'players' | 'draw' | 'standings' | 'schedule'>('overview');
-  const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false); const [showSetup, setShowSetup] = useState(false);
+  const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false); const [showSetup, setShowSetup] = useState(false); const [showSignIn, setShowSignIn] = useState(false);
   const [newTeam, setNewTeam] = useState({ name: '', organisation: '', colour: '#0891b2', group_name: 'A' });
   const [newPlayer, setNewPlayer] = useState({ name: '', entry: '' });
   const [manualStage, setManualStage] = useState('quarter_final');
@@ -149,6 +152,7 @@ export default function App() {
         throw new Error('The app loaded, but /api/bootstrap did not return app data. Configure the Cloudflare preview to route /api/* to the NZUWH Worker and its D1 database.');
       }
       setSession(data.viewer); setIsAdmin(data.viewer?.role === 'admin');
+      setOrganisers(data.viewer?.role === 'admin' ? await api<OrganiserAccount[]>('users') : []);
       setTournaments(data.tournaments); setDivisions(data.divisions); setTeams(data.teams); setEntries(data.entries);
       setMatches(data.matches); setOrganisations(data.organisations); setPlayers(data.players);
       setCourts(data.courts); setTournamentDays(data.tournament_days); setDivisionCourtRules(data.division_court_rules);
@@ -161,7 +165,7 @@ export default function App() {
   useEffect(() => { setSelectedDivision(current => divisions.some(item => item.id === current && item.tournament_id === selectedTournament) ? current : divisions.find(item => item.tournament_id === selectedTournament)?.id || ''); }, [selectedTournament, divisions]);
   useEffect(() => { setNewTeam(current => ({ ...current, organisation: '' })); }, [selectedTournament]);
   async function save(action: () => Promise<any>) { setBusy(true); setMessage(''); try { await action(); await load(); setMessage('Saved'); } catch (error) { fail(error); } finally { setBusy(false); } }
-  async function signIn(event: React.FormEvent) { event.preventDefault(); setMessage(''); setBusy(true); try { await api('login', 'POST', { email, password }); setPassword(''); await load(); } catch (error) { fail(error); } finally { setBusy(false); } }
+  async function signIn(event: React.FormEvent) { event.preventDefault(); setMessage(''); setBusy(true); try { await api('login', 'POST', { email, password }); setPassword(''); setShowSignIn(false); await load(); } catch (error) { fail(error); } finally { setBusy(false); } }
   async function signOut() { try { await api('logout', 'POST'); await load(); } catch (error) { fail(error); } }
   async function createTournament(draft: TournamentDraft): Promise<boolean> {
     setBusy(true); setMessage('');
@@ -286,11 +290,11 @@ export default function App() {
   }
   return <div className={`app ${session ? 'app-authenticated' : ''}`}>
     <header className="masthead"><div className="brand"><span className="brand-mark"><Waves size={22}/></span><div><span className="eyebrow">Underwater Hockey New Zealand</span><h1>Championships dashboard</h1></div></div><div className="account">{session ? <><span>{session.email}<small>{isAdmin ? 'Admin' : 'Scorer'}</small></span><button onClick={signOut}><LogOut size={16}/> <span>Sign out</span></button></> : <span>Public view</span>}</div></header>
-    <div className="app-frame">
-    {session && <aside className="sidebar"><nav className="main-nav" aria-label="Main navigation">{navigation.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id as typeof tab)}><Icon size={17}/><span>{item.label}</span></button>; })}</nav><div className="sidebar-footer"><button type="button" onClick={() => document.querySelector('.account-settings')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}><Settings size={16}/> Account settings</button></div></aside>}
+    <div className="app-frame has-sidebar">
+    <aside className={`sidebar ${session ? 'sidebar-authenticated' : ''}`}><nav className="main-nav" aria-label="Main navigation">{navigation.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id as typeof tab)}><Icon size={17}/><span>{item.label}</span></button>; })}</nav><div className="sidebar-footer">{session ? <button type="button" onClick={() => document.querySelector('.account-settings')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}><Settings size={16}/> Account settings</button> : <button type="button" className={showSignIn ? 'active' : ''} aria-expanded={showSignIn} onClick={() => setShowSignIn(open => !open)}><LogIn size={16}/>{showSignIn ? 'Close sign in' : 'Organiser sign in'}</button>}</div></aside>
     <div className="workspace">
     {message && <div className="notice" role="status">{message}<button onClick={() => setMessage('')}>×</button></div>}
-    {!session && <form className="signin" onSubmit={signIn}><strong>Organiser sign in</strong><input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required/><input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required/><button>Sign in</button></form>}
+    {!session && showSignIn && <form className="signin" onSubmit={signIn}><strong>Organiser sign in</strong><input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required/><input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required/><button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button></form>}
     {session && <details className="panel account-settings"><summary>Account settings</summary>
       <form className="inlineform" onSubmit={event => { event.preventDefault(); (async () => { setBusy(true); try { await api('password', 'POST', passwordChange); setPasswordChange({ currentPassword: '', newPassword: '' }); await load(); setMessage('Password changed. Sign in again.'); } catch (error) { fail(error); } finally { setBusy(false); } })(); }}>
         <input type="password" autoComplete="current-password" required placeholder="Current password" value={passwordChange.currentPassword} onChange={event => setPasswordChange({ ...passwordChange, currentPassword: event.target.value })}/>
@@ -303,6 +307,13 @@ export default function App() {
         <select value={newOrganiser.role} onChange={event => setNewOrganiser({ ...newOrganiser, role: event.target.value })}><option value="scorer">Scorer</option><option value="admin">Admin</option></select>
         <button disabled={busy}>Add organiser</button>
       </form>}
+      {isAdmin && <section className="organiser-accounts"><div className="sectiontitle"><div><h3>Organiser accounts</h3><p>Set a temporary password. The organiser can change it in account settings after signing in.</p></div></div>
+        <div className="organiser-list">{organisers.map(organiser => <form className="organiser-row" key={organiser.id} onSubmit={event => { event.preventDefault(); save(async () => { await api(`users/${organiser.id}/password`, 'POST', { newPassword: resetPasswords[organiser.id] }); setResetPasswords(current => ({ ...current, [organiser.id]: '' })); }); }}>
+          <div className="organiser-id"><strong>{organiser.email}</strong><span className="tag">{organiser.role}</span></div>
+          <input type="password" autoComplete="new-password" minLength={12} maxLength={256} required placeholder="Temporary password (12+ characters)" value={resetPasswords[organiser.id] || ''} onChange={event => setResetPasswords(current => ({ ...current, [organiser.id]: event.target.value }))}/>
+          <button disabled={busy}>Reset password</button>
+        </form>)}</div>
+      </section>}
     </details>}
     <main>
       <div className="topline"><div><span className="eyebrow">Events</span><h2>Tournaments</h2></div><div className="tournament-actions">{isAdmin && !!tournaments.length && <button onClick={() => setShowSetup(value => !value)}>{showSetup ? 'Close setup' : 'New tournament'}</button>}<select aria-label="Select tournament" value={selectedTournament} onChange={e => setSelectedTournament(e.target.value)}><option value="">Select tournament</option>{tournaments.map(item => <option key={item.id} value={item.id}>{item.name} · {item.starts_on}</option>)}</select></div></div>
