@@ -10,6 +10,7 @@ const worker = (await import('/private/tmp/nzuwh-worker-test.mjs')).default;
 const database = new DatabaseSync(':memory:');
 database.exec(readFileSync('migrations/0001_initial.sql', 'utf8'));
 database.exec(readFileSync('migrations/0002_tournament_setup.sql', 'utf8'));
+database.exec(readFileSync('migrations/0003_schedule_engine.sql', 'utf8'));
 const db = {
   prepare(sql) {
     const statement = database.prepare(sql);
@@ -72,6 +73,7 @@ test('setup migration preserves older teams, court labels, and event dates', () 
     INSERT INTO matches (id,division_id,scheduled_on,court) VALUES ('match-old','div-old-1','2025-11-01','Far Side');
   `);
   legacyDb.exec(readFileSync('migrations/0002_tournament_setup.sql', 'utf8'));
+  legacyDb.exec(readFileSync('migrations/0003_schedule_engine.sql', 'utf8'));
   assert.equal(legacyDb.prepare('SELECT count(*) AS n FROM teams').get().n, 1);
   assert.equal(legacyDb.prepare('SELECT count(DISTINCT team_id) AS n FROM division_teams').get().n, 1);
   assert.deepEqual(legacyDb.prepare('SELECT team_colour FROM division_teams ORDER BY id').all().map(row => row.team_colour).sort(), ['#112233', '#445566']);

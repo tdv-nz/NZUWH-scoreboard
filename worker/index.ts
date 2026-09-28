@@ -1,5 +1,6 @@
 import { ApiError, body, json, requireChoice, requireInteger, requireText, sameOrigin, type BindValue, type Env, type Statement } from './types';
 import { changePassword, createOrganiser, login, logout, requireAdmin, viewer } from './auth';
+import { generateSchedule, validateScheduleEdit } from './schedule';
 
 const id = () => crypto.randomUUID();
 const optional = (value: unknown, label: string, max = 200): string | null => value == null || value === '' ? null : requireText(value, label, max);
@@ -282,7 +283,7 @@ async function updateDivisionCourtRules(env: Env, divisionId: string, input: Rec
   await env.DB.batch(statements);
   return json({ ok: true });
 }
-async function update(env: Env, table: string, rowId: string, input: Record<string, unknown>) {
+async function update(env: Env, table: string, rowId: string, input: Record<string, unknown>, scheduleDiagnostics?: { issue: string | null; warning: string | null }) {
   const allowed: Record<string, string[]> = {
     tournaments: ['status'], divisions: ['group_count','round_robins','finals_format','win_points','draw_points','loss_points'],
     division_teams: ['group_name','seed'], matches: [...matchColumns].filter(key => key !== 'division_id'),
@@ -305,7 +306,9 @@ async function update(env: Env, table: string, rowId: string, input: Record<stri
     if (key === 'scheduled_on') return date(value, key);
     return requireText(value, key, 200);
   });
-  const result = await q(env, `UPDATE ${table} SET ${keys.map(key => `${key}=?`).join(',')}${table === 'matches' || table === 'tournaments' ? ',updated_at=CURRENT_TIMESTAMP' : ''} WHERE id=?`, ...values, uuid(rowId, 'id')).run();
+  const diagnosticSql = table === 'matches' && scheduleDiagnostics ? ',schedule_issue=?,schedule_warning=?' : '';
+  const diagnosticValues: BindValue[] = table === 'matches' && scheduleDiagnostics ? [scheduleDiagnostics.issue, scheduleDiagnostics.warning] : [];
+  const result = await q(env, `UPDATE ${table} SET ${keys.map(key => `${key}=?`).join(',')}${diagnosticSql}${table === 'matches' || table === 'tournaments' ? ',updated_at=CURRENT_TIMESTAMP' : ''} WHERE id=?`, ...values, ...diagnosticValues, uuid(rowId, 'id')).run();
   if (!result.meta.changes) throw new ApiError(404, 'Record not found');
   return json({ ok: true });
 }
@@ -346,9 +349,22 @@ export default {
       if (request.method === 'PATCH' && path.startsWith('/api/matches/')) {
         const input = await body(request);
         if (user.role === 'scorer' && Object.keys(input).some(key => !['home_score','away_score','status'].includes(key))) throw new ApiError(403, 'Only admins can change fixtures');
-        return await update(env, 'matches', path.slice('/api/matches/'.length), input);
+        const matchId = uuid(path.slice('/api/matches/'.length), 'match');
+        if (user.role === 'admin' && ['scheduled_on','starts_at','court_id'].some(key => Object.hasOwn(input, key))) {
+          const { confirm_warnings, ...changes } = input;
+          if (confirm_warnings !== undefined && typeof confirm_warnings !== 'boolean') throw new ApiError(400, 'Invalid warning confirmation');
+          const validation = await validateScheduleEdit(env, matchId, changes, confirm_warnings === true);
+          if (validation.warnings.length && confirm_warnings !== true) {
+            return json({ error: 'Confirm these scheduling warnings before saving.', warnings: validation.warnings, requires_confirmation: true }, 409);
+          }
+          if (validation.court !== undefined) changes.court = validation.court;
+          return await update(env, 'matches', matchId, changes, { issue: validation.issue ?? null, warning: validation.warning ?? null });
+        }
+        return await update(env, 'matches', matchId, input);
       }
       requireAdmin(user);
+      const schedule = path.match(/^\/api\/tournaments\/([0-9a-f-]+)\/schedule\/generate$/);
+      if (request.method === 'POST' && schedule) return await generateSchedule(env, uuid(schedule[1], 'tournament'));
       const courtRules = path.match(/^\/api\/divisions\/([0-9a-f-]+)\/court-rules$/);
       if (request.method === 'PUT' && courtRules) return await updateDivisionCourtRules(env, uuid(courtRules[1], 'division'), await body(request));
       if (request.method === 'POST' && path === '/api/tournaments') return await createTournament(env, await body(request));
