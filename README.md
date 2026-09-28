@@ -29,6 +29,21 @@ Admins can generate a tournament-wide schedule from the saved playing days, cour
    The generated SQL file contains a password hash, is ignored by Git, and should be removed after use. Use `--local` instead of `--remote` if bootstrapping a local database.
 5. Run `npm run dev` to build and run the Worker with the local D1 database. Sign in with the account above. Create other admin or scorer accounts in **Account settings**. `npm run deploy` builds and deploys the Worker and static app together after the remote migration is applied.
 
+### Reset a forgotten admin password
+
+If you can sign in and know the current password, use **Account settings**. Otherwise, from a regular Terminal in the repository, generate a reset for the existing admin email and apply it to the remote D1 database:
+
+```sh
+read -s 'NZUWH_ADMIN_PASSWORD?New admin password (12+ characters): '
+printf '\n'
+printf '%s\n' "$NZUWH_ADMIN_PASSWORD" | node scripts/reset-admin.mjs admin@example.com
+unset NZUWH_ADMIN_PASSWORD
+NODE_USE_SYSTEM_CA=1 npx wrangler d1 execute nzuwh-championships --remote --file=.admin-reset.sql
+rm .admin-reset.sql
+```
+
+Check that Wrangler reports `reset_admin_count` as `1`. The reset clears that admin's login lockout and revokes their existing sessions. Use `--local` instead of `--remote` to reset the local database. The generated SQL contains only the password hash, is ignored by Git, and should be deleted after use.
+
 ### Cloudflare Pages previews
 
 The primary deployment is a Worker with Static Assets. If this repository is also built as a Pages project, use `npm run build` with `dist` as the output directory; the `functions/api/[[path]].ts` adapter forwards `/api/*` requests to the same Worker API. Configure a `DB` D1 binding for both Preview and Production in the Pages project before redeploying. Use an isolated preview database if preview users may submit writes; the configured Worker database is the production database.

@@ -32,4 +32,5 @@ supabase/.temp/
 
 # Contains a password hash for the first organiser
 .admin-bootstrap.sql
+.admin-reset.sql
 .wrangler/
