@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError, type Bootstrap, type Viewer } from './lib/api';
 import { createGroupDraw } from './lib/draw';
 import TournamentSetup, { type CourtAllocation, type Organisation, type TournamentDraft } from './TournamentSetup';
+import { CalendarDays, ClipboardList, Home, LogOut, Settings, Shield, Trophy, Users, Waves } from 'lucide-react';
 import './App.css';
+import './Scorer.css';
 
 type Tournament = { id: string; name: string; category: string; starts_on: string; ends_on: string; venue: string | null; court_count: number; status: string; record_goal_scorers: number };
 type Division = { id: string; tournament_id: string; name: string; group_count: number; round_robins: number; finals_format: string; win_points: number; draw_points: number; loss_points: number };
@@ -119,6 +121,14 @@ export default function App() {
   const organisationName = (team: Team | undefined) => organisations.find(item => item.id === team?.organisation_id)?.name || team?.organisation || '—';
   const organisationKind = tournament?.category === 'regional' ? 'region' : tournament?.category || 'club';
   const organisationLabel = organisationKind[0].toUpperCase() + organisationKind.slice(1);
+  const navigation = [
+    { id: 'overview', label: 'Dashboard', icon: Home },
+    ...(isAdmin ? [{ id: 'teams', label: 'Teams', icon: Users }] : []),
+    ...(session ? [{ id: 'players', label: 'Players', icon: Shield }] : []),
+    { id: 'draw', label: 'Draw & results', icon: ClipboardList },
+    { id: 'standings', label: 'Standings', icon: Trophy },
+    { id: 'schedule', label: 'Schedule', icon: CalendarDays },
+  ] as const;
   function exportSchedule() {
     const cell = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
     const rows = [['Date', 'Time', 'Court', 'Game', 'Division', 'Stage', 'White', 'Score', 'Black', 'Score', 'Referee', 'Schedule notes'],
@@ -147,6 +157,7 @@ export default function App() {
     } catch (error) { fail(error); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (session?.role === 'scorer') setTab(current => current === 'overview' ? 'schedule' : current); }, [session?.role]);
   useEffect(() => { setSelectedDivision(current => divisions.some(item => item.id === current && item.tournament_id === selectedTournament) ? current : divisions.find(item => item.tournament_id === selectedTournament)?.id || ''); }, [selectedTournament, divisions]);
   useEffect(() => { setNewTeam(current => ({ ...current, organisation: '' })); }, [selectedTournament]);
   async function save(action: () => Promise<any>) { setBusy(true); setMessage(''); try { await action(); await load(); setMessage('Saved'); } catch (error) { fail(error); } finally { setBusy(false); } }
@@ -273,8 +284,11 @@ export default function App() {
             <span><button type="button" disabled={!attended} onClick={() => addGoal(match.id, roster.player_id, entryId)}>+ goal</button><b>{goalCount}</b>{goalCount > 0 && <button type="button" onClick={() => removeGoal(match.id, roster.player_id)}>−</button>}</span></div>;
         })}</div>)}</div></details>;
   }
-  return <div className="app">
-    <header className="masthead"><div><span className="eyebrow">Underwater Hockey New Zealand</span><h1>Championships</h1></div><div className="account">{session ? <><span>{session.email}{isAdmin ? ' · Admin' : ' · Scorer'}</span><button onClick={signOut}>Sign out</button></> : <span>Public view</span>}</div></header>
+  return <div className={`app ${session ? 'app-authenticated' : ''}`}>
+    <header className="masthead"><div className="brand"><span className="brand-mark"><Waves size={22}/></span><div><span className="eyebrow">Underwater Hockey New Zealand</span><h1>Championships dashboard</h1></div></div><div className="account">{session ? <><span>{session.email}<small>{isAdmin ? 'Admin' : 'Scorer'}</small></span><button onClick={signOut}><LogOut size={16}/> <span>Sign out</span></button></> : <span>Public view</span>}</div></header>
+    <div className="app-frame">
+    {session && <aside className="sidebar"><nav className="main-nav" aria-label="Main navigation">{navigation.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id as typeof tab)}><Icon size={17}/><span>{item.label}</span></button>; })}</nav><div className="sidebar-footer"><button type="button" onClick={() => document.querySelector('.account-settings')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}><Settings size={16}/> Account settings</button></div></aside>}
+    <div className="workspace">
     {message && <div className="notice" role="status">{message}<button onClick={() => setMessage('')}>×</button></div>}
     {!session && <form className="signin" onSubmit={signIn}><strong>Organiser sign in</strong><input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required/><input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required/><button>Sign in</button></form>}
     {session && <details className="panel account-settings"><summary>Account settings</summary>
@@ -295,7 +309,7 @@ export default function App() {
       {isAdmin && (showSetup || !tournaments.length) && <TournamentSetup busy={busy} organisations={organisations} teams={teams} onCreate={createTournament}/>}
       {tournament ? <><section className="eventhead"><div><span className="tag">{tournament.category} · {tournament.status}</span><h2>{tournament.name}</h2><p>{tournament.starts_on} to {tournament.ends_on}{tournament.venue ? ` · ${tournament.venue}` : ''} · {tournament.court_count} {tournament.court_count === 1 ? 'court' : 'courts'}</p><p className="scoring-mode">Scoring mode: <strong>{tournament.record_goal_scorers ? 'Team scores and goal scorers' : 'Team scores only'}</strong></p></div>{isAdmin && <label>Status<select value={tournament.status} onChange={e => save(() => api(`tournaments/${tournament.id}`, 'PATCH', { status: e.target.value }))}><option value="draft">Draft</option><option value="published">Published</option><option value="completed">Completed</option></select></label>}</section>
         <div className="divisionbar">{divisions.filter(item => item.tournament_id === tournament.id).map(item => <button className={selectedDivision === item.id ? 'active' : ''} key={item.id} onClick={() => setSelectedDivision(item.id)}>{item.name}</button>)}{isAdmin && <button onClick={() => { const name = prompt('New division name'); if (name?.trim()) save(() => api('divisions', 'POST', { tournament_id: tournament.id, name: name.trim() })); }}>+ Division</button>}</div>
-        {division && <><nav className="tabs">{(['overview','teams',...(session ? ['players' as const] : []),'draw','standings','schedule'] as const).map(item => <button className={tab === item ? 'active' : ''} key={item} onClick={() => setTab(item)}>{item}</button>)}</nav>
+        {division && <>
           {tab === 'overview' && <section className="panel"><h3>{division.name} format</h3><div className="metrics"><div><b>{divisionEntries.length}</b><span>Teams</span></div><div><b>{divisionMatches.filter(m => m.stage === 'group').length}</b><span>Pool games</span></div><div><b>{divisionMatches.filter(m => m.stage !== 'group').length}</b><span>Finals and placing</span></div></div>{isAdmin && <div className="formgrid"><label>Groups<select value={division.group_count} disabled={divisionEntries.length > 0 || divisionMatches.some(match => match.stage === 'group')} onChange={e => updateDivision({ group_count: Number(e.target.value) })}><option value={1}>One group</option><option value={2}>Two groups</option></select></label><label>Round robin<select value={division.round_robins} disabled={divisionMatches.some(match => match.stage === 'group')} onChange={e => updateDivision({ round_robins: Number(e.target.value) })}><option value={1}>Single</option><option value={2}>Double</option></select></label><label>Finals format<select value={division.finals_format} disabled={divisionMatches.some(match => match.stage !== 'group')} onChange={e => updateDivision({ finals_format: e.target.value })}><option value="none">No finals</option>{division.group_count === 1 ? <><option value="top_two">Top two final</option><option value="top_four">Top four semi-finals</option></> : <option value="two_pool_crossover">Crossover quarter-finals</option>}<option value="manual">Custom finals</option></select></label></div>}<CourtRulesEditor divisionId={division.id} courts={courts.filter(court => court.tournament_id === tournament.id)} rules={divisionCourtRules} editable={isAdmin && tournament.status === 'draft'} onSave={change => save(() => api(`divisions/${division.id}/court-rules`, 'PUT', change))}/><p className="hint">Set teams and pools, then generate fixtures. The schedule builder will use the saved court rules and playing windows.</p></section>}
           {tab === 'teams' && <section className="panel"><h3>Teams and pools</h3>{isAdmin && !divisionMatches.some(match => match.stage === 'group') && <form className="inlineform" onSubmit={addTeam}><input placeholder="Team name" value={newTeam.name} onChange={e => setNewTeam({ ...newTeam, name: e.target.value })} required/><input list="existing-organisations" required placeholder={organisationLabel} aria-label={organisationLabel} value={newTeam.organisation} onChange={e => setNewTeam({ ...newTeam, organisation: e.target.value })}/><datalist id="existing-organisations">{organisations.filter(item => item.kind === organisationKind).map(item => <option key={item.id} value={item.name}/>)}{organisationKind === 'region' && ['Northern', 'Central', 'Southern'].map(name => <option value={name} key={name}/>)}</datalist><input type="color" title="Team colour" value={newTeam.colour} onChange={e => setNewTeam({ ...newTeam, colour: e.target.value })}/>{division.group_count === 2 && <select value={newTeam.group_name} onChange={e => setNewTeam({ ...newTeam, group_name: e.target.value })}><option value="A">Pool A</option><option value="B">Pool B</option></select>}<button disabled={busy}>Add team</button></form>}<div className="tablewrap"><table><thead><tr><th>Team</th><th>{organisationLabel}</th><th>Pool</th><th>Seed</th></tr></thead><tbody>{divisionEntries.map(entry => { const team = teams.find(item => item.id === entry.team_id); return <tr key={entry.id}><td><i className="swatch" style={{ background: entry.team_colour || team?.colour || '#94a3b8' }}/>{team?.name}</td><td>{organisationName(team)}</td><td>{isAdmin && division.group_count === 2 ? <select value={entry.group_name || 'A'} disabled={divisionMatches.some(match => match.stage === 'group')} onChange={e => save(() => api(`division_teams/${entry.id}`, 'PATCH', { group_name: e.target.value, seed: null }))}><option>A</option><option>B</option></select> : entry.group_name || 'A'}</td><td>{entry.seed || '—'}</td></tr>; })}</tbody></table></div></section>}
           {tab === 'players' && session && <section className="panel"><h3>Team rosters</h3>{isAdmin && <form className="inlineform" onSubmit={addPlayer}><input placeholder="Player name" value={newPlayer.name} onChange={e => setNewPlayer({ ...newPlayer, name: e.target.value })} required/><select value={newPlayer.entry} onChange={e => setNewPlayer({ ...newPlayer, entry: e.target.value })} required><option value="">Choose team</option>{divisionEntries.map(entry => <option key={entry.id} value={entry.id}>{teamName(entry.id)}</option>)}</select><button disabled={busy}>Add player</button></form>}<div className="tablewrap"><table><thead><tr><th>Team</th><th>Player</th></tr></thead><tbody>{rosters.filter(roster => divisionEntries.some(entry => entry.id === roster.division_team_id)).sort((a,b) => teamName(a.division_team_id).localeCompare(teamName(b.division_team_id))).map(roster => <tr key={roster.id}><td>{teamName(roster.division_team_id)}</td><td>{players.find(player => player.id === roster.player_id)?.name}</td></tr>)}</tbody></table></div></section>}
@@ -315,5 +329,6 @@ export default function App() {
         </>}
       </> : <section className="panel empty">No tournaments yet. An admin can create the first championship above.</section>}
     </main>
+    </div></div>
   </div>;
 }
