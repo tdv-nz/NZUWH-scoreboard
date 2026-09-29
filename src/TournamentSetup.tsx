@@ -31,7 +31,7 @@ export type TournamentDraft = {
   courts: CourtDraft[];
   days: DayDraft[];
   schedule: {
-    match_duration_minutes: number;
+    half_duration_minutes: number;
     halftime_minutes: number;
     gap_between_games_minutes: number;
     team_turnaround_minutes: number;
@@ -68,7 +68,7 @@ function blankTournament(): TournamentDraft {
   const courts = [blankCourt(0), blankCourt(1)];
   return { name: '', category: 'club', starts_on: dateToday, ends_on: dateToday, venue: '', court_count: 2, courts,
     days: [blankDay(dateToday, courts)],
-    schedule: { match_duration_minutes: 20, halftime_minutes: 2, gap_between_games_minutes: 0, team_turnaround_minutes: 20 },
+      schedule: { half_duration_minutes: 10, halftime_minutes: 2, gap_between_games_minutes: 0, team_turnaround_minutes: 20 },
     record_goal_scorers: false, divisions: [] };
 }
 const orderWindows = (windows: TimeWindow[]) => [...windows].sort((a, b) => a.starts_at.localeCompare(b.starts_at));
@@ -292,11 +292,11 @@ export default function TournamentSetup({ busy, organisations, teams, onCreate }
 
       {step === 3 && <>
         <div className="setup-step"><h3>Schedule defaults</h3><p className="hint">These values are stored for the later draw and scheduling step.</p><div className="formgrid">
-          <label>Match duration (minutes)<input type="number" min="1" max="240" value={draft.schedule.match_duration_minutes} onChange={event => setDraft(current => ({ ...current, schedule: { ...current.schedule, match_duration_minutes: Number(event.target.value) } }))}/></label>
+          <label>Length of each half (minutes)<input type="number" min="1" max="120" value={draft.schedule.half_duration_minutes} onChange={event => setDraft(current => ({ ...current, schedule: { ...current.schedule, half_duration_minutes: Number(event.target.value) } }))}/></label>
           <label>Halftime (minutes)<input type="number" min="0" max="60" value={draft.schedule.halftime_minutes} onChange={event => setDraft(current => ({ ...current, schedule: { ...current.schedule, halftime_minutes: Number(event.target.value) } }))}/></label>
           <label>Gap between games (minutes)<input type="number" min="0" max="180" value={draft.schedule.gap_between_games_minutes} onChange={event => setDraft(current => ({ ...current, schedule: { ...current.schedule, gap_between_games_minutes: Number(event.target.value) } }))}/></label>
           <label>Minimum team turnaround (minutes)<input type="number" min="0" max="720" value={draft.schedule.team_turnaround_minutes} onChange={event => setDraft(current => ({ ...current, schedule: { ...current.schedule, team_turnaround_minutes: Number(event.target.value) } }))}/></label>
-        </div><p className="hint">The scheduler will try to leave at least an hour between a team’s games when court availability allows. Minimum team turnaround is the hard limit used when the draw is tight.</p></div>
+        </div><p className="hint">A match is two equal halves plus halftime. The scheduler will try to leave at least an hour between a team’s games when court availability allows. Minimum team turnaround is the hard limit used when the draw is tight.</p></div>
         <div className="setup-step"><h3>Available playing days</h3>{draft.days.map((day, dayIndex) => <article className="day-setup" key={day.day_on}>
           <div className="sectiontitle"><h4>{day.day_on}</h4><label className="inline-check"><input type="checkbox" checked={day.available} onChange={event => updateDay(dayIndex, { available: event.target.checked })}/>Playing day</label></div>
           <div className="formgrid"><label>Start time<input type="time" value={day.starts_at} onChange={event => updateDay(dayIndex, { starts_at: event.target.value })}/></label><label>Finish time<input type="time" value={day.ends_at} onChange={event => updateDay(dayIndex, { ends_at: event.target.value })}/></label></div>

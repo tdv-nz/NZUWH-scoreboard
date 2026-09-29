@@ -99,8 +99,10 @@ async function createTournament(env: Env, input: Record<string, unknown>) {
   if (typeof recordGoalScorers !== 'boolean') throw new ApiError(400, 'Invalid goal-scorer setting');
 
   const scheduleDraft = input.schedule === undefined ? {} : record(input.schedule, 'Schedule settings');
+  const halfDuration = requireInteger(scheduleDraft.half_duration_minutes ?? 10, 'half duration', 1, 120);
   const schedule = {
-    match_duration_minutes: requireInteger(scheduleDraft.match_duration_minutes ?? 20, 'match duration', 1, 240),
+    match_duration_minutes: halfDuration * 2,
+    half_duration_minutes: halfDuration,
     halftime_minutes: requireInteger(scheduleDraft.halftime_minutes ?? 2, 'halftime duration', 0, 60),
     gap_between_games_minutes: requireInteger(scheduleDraft.gap_between_games_minutes ?? 0, 'gap between games', 0, 180),
     team_turnaround_minutes: requireInteger(scheduleDraft.team_turnaround_minutes ?? 20, 'team turnaround', 0, 720),
@@ -162,8 +164,8 @@ async function createTournament(env: Env, input: Record<string, unknown>) {
   if (!divisions.length) throw new ApiError(400, 'At least one division is required');
   const statements = [q(env, 'INSERT INTO tournaments (id,name,category,starts_on,ends_on,venue,court_count,record_goal_scorers) VALUES (?,?,?,?,?,?,?,?)',
     tournamentId, requireText(input.name, 'Tournament name'), category, start, end, optional(input.venue, 'Venue'), courts.filter(court => court.active).length, recordGoalScorers ? 1 : 0)];
-  statements.push(q(env, 'INSERT INTO schedule_settings (tournament_id,match_duration_minutes,halftime_minutes,gap_between_games_minutes,team_turnaround_minutes) VALUES (?,?,?,?,?)',
-    tournamentId, schedule.match_duration_minutes, schedule.halftime_minutes, schedule.gap_between_games_minutes, schedule.team_turnaround_minutes));
+  statements.push(q(env, 'INSERT INTO schedule_settings (tournament_id,match_duration_minutes,halftime_minutes,gap_between_games_minutes,team_turnaround_minutes,half_duration_minutes) VALUES (?,?,?,?,?,?)',
+    tournamentId, schedule.match_duration_minutes, schedule.halftime_minutes, schedule.gap_between_games_minutes, schedule.team_turnaround_minutes, schedule.half_duration_minutes));
   for (const court of courts) statements.push(q(env, 'INSERT INTO courts (id,tournament_id,display_name,display_order,active) VALUES (?,?,?,?,?)',
     court.id, tournamentId, court.display_name, court.display_order, court.active));
   for (const day of days) {
@@ -283,6 +285,49 @@ async function updateDivisionCourtRules(env: Env, divisionId: string, input: Rec
   await env.DB.batch(statements);
   return json({ ok: true });
 }
+async function updateTournamentSettings(env: Env, tournamentId: string, input: Record<string, unknown>) {
+  const current = await q(env, 'SELECT * FROM tournaments WHERE id=?', tournamentId).first<any>();
+  if (!current) throw new ApiError(404, 'Tournament not found');
+  const scheduleInput = record(input.schedule, 'Schedule settings');
+  const name = requireText(input.name, 'Tournament name');
+  const startsOn = date(input.starts_on, 'First day'); const endsOn = date(input.ends_on, 'Last day');
+  if (endsOn < startsOn) throw new ApiError(400, 'Last day must follow first day');
+  const venue = optional(input.venue, 'Venue');
+  const recordGoalScorers = input.record_goal_scorers;
+  if (typeof recordGoalScorers !== 'boolean') throw new ApiError(400, 'Invalid goal-scorer setting');
+  const schedule = {
+    half_duration_minutes: requireInteger(scheduleInput.half_duration_minutes, 'half duration', 1, 120),
+    halftime_minutes: requireInteger(scheduleInput.halftime_minutes, 'halftime duration', 0, 60),
+    gap_between_games_minutes: requireInteger(scheduleInput.gap_between_games_minutes, 'gap between games', 0, 180),
+    team_turnaround_minutes: requireInteger(scheduleInput.team_turnaround_minutes, 'team turnaround', 0, 720),
+  };
+  const scheduledOutside = await q(env, `SELECT m.scheduled_on FROM matches m JOIN divisions d ON d.id=m.division_id
+    WHERE d.tournament_id=? AND m.scheduled_on IS NOT NULL AND (m.scheduled_on<? OR m.scheduled_on>?) LIMIT 1`, tournamentId, startsOn, endsOn).first<{ scheduled_on: string }>();
+  if (scheduledOutside) throw new ApiError(400, `Tournament dates cannot exclude scheduled fixtures on ${scheduledOutside.scheduled_on}.`);
+  const [existingDays, activeCourts] = await Promise.all([
+    q(env, 'SELECT day_on FROM tournament_days WHERE tournament_id=?', tournamentId).all<{ day_on: string }>(),
+    q(env, 'SELECT id FROM courts WHERE tournament_id=? AND active=1', tournamentId).all<{ id: string }>(),
+  ]);
+  const existingDates = new Set(existingDays.results.map(item => item.day_on));
+  const statements: Statement[] = [
+    q(env, `UPDATE tournaments SET name=?,starts_on=?,ends_on=?,venue=?,record_goal_scorers=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+      name, startsOn, endsOn, venue, recordGoalScorers ? 1 : 0, tournamentId),
+    q(env, `UPDATE schedule_settings SET half_duration_minutes=?,match_duration_minutes=?,halftime_minutes=?,gap_between_games_minutes=?,team_turnaround_minutes=? WHERE tournament_id=?`,
+      schedule.half_duration_minutes, schedule.half_duration_minutes * 2, schedule.halftime_minutes,
+      schedule.gap_between_games_minutes, schedule.team_turnaround_minutes, tournamentId),
+    q(env, 'DELETE FROM tournament_days WHERE tournament_id=? AND (day_on<? OR day_on>?)', tournamentId, startsOn, endsOn),
+  ];
+  for (const day_on of dateRange(startsOn, endsOn)) {
+    if (existingDates.has(day_on)) continue;
+    const dayId = id();
+    statements.push(q(env, 'INSERT INTO tournament_days (id,tournament_id,day_on,available,starts_at,ends_at) VALUES (?,?,?,1,?,?)', dayId, tournamentId, day_on, '09:00', '17:00'));
+    for (const court of activeCourts.results) statements.push(q(env,
+      'INSERT INTO court_availability (id,tournament_id,court_id,day_on,starts_at,ends_at) VALUES (?,?,?,?,?,?)',
+      id(), tournamentId, court.id, day_on, '09:00', '17:00'));
+  }
+  await env.DB.batch(statements);
+  return json({ ok: true });
+}
 async function update(env: Env, table: string, rowId: string, input: Record<string, unknown>, scheduleDiagnostics?: { issue: string | null; warning: string | null }) {
   const allowed: Record<string, string[]> = {
     tournaments: ['status'], divisions: ['group_count','round_robins','finals_format','win_points','draw_points','loss_points'],
@@ -383,6 +428,8 @@ export default {
       }
       const schedule = path.match(/^\/api\/tournaments\/([0-9a-f-]+)\/schedule\/generate$/);
       if (request.method === 'POST' && schedule) return await generateSchedule(env, uuid(schedule[1], 'tournament'));
+      const tournamentSettings = path.match(/^\/api\/tournaments\/([0-9a-f-]+)\/settings$/);
+      if (request.method === 'PATCH' && tournamentSettings) return await updateTournamentSettings(env, uuid(tournamentSettings[1], 'tournament'), await body(request));
       const courtRules = path.match(/^\/api\/divisions\/([0-9a-f-]+)\/court-rules$/);
       if (request.method === 'PUT' && courtRules) return await updateDivisionCourtRules(env, uuid(courtRules[1], 'division'), await body(request));
       if (request.method === 'POST' && path === '/api/tournaments') return await createTournament(env, await body(request));

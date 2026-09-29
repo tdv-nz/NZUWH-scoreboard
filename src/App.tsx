@@ -12,6 +12,7 @@ type Team = { id: string; name: string; organisation: string | null; organisatio
 type Entry = { id: string; division_id: string; team_id: string; group_name: string | null; seed: number | null; team_colour: string | null };
 type Court = { id: string; tournament_id: string; display_name: string; display_order: number; active: number };
 type TournamentDay = { id: string; tournament_id: string; day_on: string; available: number; starts_at: string; ends_at: string };
+type ScheduleSettings = { tournament_id: string; half_duration_minutes: number; halftime_minutes: number; gap_between_games_minutes: number; team_turnaround_minutes: number };
 type DivisionCourtRule = { id: string; division_id: string; court_id: string; allocation_type: CourtAllocation; preference_order: number };
 type Player = { id: string; name: string };
 type OrganiserAccount = { id: string; email: string; role: 'admin' | 'scorer'; created_at: string };
@@ -107,6 +108,49 @@ function MatchScheduleEditor({ match, courts, busy, onSave, onUnlock }: { match:
   </div>;
 }
 
+function TournamentSettingsEditor({ tournament, settings, busy, onSave, onCancel }: {
+  tournament: Tournament; settings: ScheduleSettings | undefined; busy: boolean;
+  onSave: (value: Record<string, unknown>) => Promise<void>; onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState({
+    name: tournament.name, starts_on: tournament.starts_on, ends_on: tournament.ends_on, venue: tournament.venue || '',
+    record_goal_scorers: !!tournament.record_goal_scorers,
+    schedule: {
+      half_duration_minutes: settings?.half_duration_minutes ?? 10,
+      halftime_minutes: settings?.halftime_minutes ?? 2,
+      gap_between_games_minutes: settings?.gap_between_games_minutes ?? 0,
+      team_turnaround_minutes: settings?.team_turnaround_minutes ?? 20,
+    },
+  });
+  useEffect(() => setDraft({
+    name: tournament.name, starts_on: tournament.starts_on, ends_on: tournament.ends_on, venue: tournament.venue || '',
+    record_goal_scorers: !!tournament.record_goal_scorers,
+    schedule: {
+      half_duration_minutes: settings?.half_duration_minutes ?? 10,
+      halftime_minutes: settings?.halftime_minutes ?? 2,
+      gap_between_games_minutes: settings?.gap_between_games_minutes ?? 0,
+      team_turnaround_minutes: settings?.team_turnaround_minutes ?? 20,
+    },
+  }), [tournament, settings]);
+  return <form className="panel tournament-settings-editor" onSubmit={event => { event.preventDefault(); void onSave(draft); }}>
+    <div className="sectiontitle"><div><h3>Edit tournament</h3><p className="hint">Tournament type and court setup are fixed after creation. New dates receive 9:00 am–5:00 pm availability on active courts. Timing changes affect future schedule generation.</p></div></div>
+    <div className="formgrid">
+      <label>Tournament name<input required maxLength={200} value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })}/></label>
+      <label>First day<input required type="date" value={draft.starts_on} onChange={event => setDraft({ ...draft, starts_on: event.target.value })}/></label>
+      <label>Last day<input required type="date" min={draft.starts_on} value={draft.ends_on} onChange={event => setDraft({ ...draft, ends_on: event.target.value })}/></label>
+      <label>Venue<input maxLength={200} value={draft.venue} onChange={event => setDraft({ ...draft, venue: event.target.value })}/></label>
+    </div>
+    <h4>Game timing</h4><div className="formgrid">
+      <label>Length of each half (minutes)<input required type="number" min="1" max="120" value={draft.schedule.half_duration_minutes} onChange={event => setDraft({ ...draft, schedule: { ...draft.schedule, half_duration_minutes: Number(event.target.value) } })}/></label>
+      <label>Half-time break (minutes)<input required type="number" min="0" max="60" value={draft.schedule.halftime_minutes} onChange={event => setDraft({ ...draft, schedule: { ...draft.schedule, halftime_minutes: Number(event.target.value) } })}/></label>
+      <label>Gap between games on a court (minutes)<input required type="number" min="0" max="180" value={draft.schedule.gap_between_games_minutes} onChange={event => setDraft({ ...draft, schedule: { ...draft.schedule, gap_between_games_minutes: Number(event.target.value) } })}/></label>
+      <label>Minimum team turnaround (minutes)<input required type="number" min="0" max="720" value={draft.schedule.team_turnaround_minutes} onChange={event => setDraft({ ...draft, schedule: { ...draft.schedule, team_turnaround_minutes: Number(event.target.value) } })}/></label>
+    </div>
+    <label className="inline-check"><input type="checkbox" checked={draft.record_goal_scorers} onChange={event => setDraft({ ...draft, record_goal_scorers: event.target.checked })}/>Record individual goal scorers</label>
+    <div className="wizard-actions"><button type="button" onClick={onCancel}>Cancel</button><button className="create-button" disabled={busy}>{busy ? 'Saving…' : 'Save tournament'}</button></div>
+  </form>;
+}
+
 function CourtRulesEditor({ divisionId, courts, rules, editable, onSave }: {
   divisionId: string; courts: Court[]; rules: DivisionCourtRule[]; editable: boolean;
   onSave: (value: { allocation_type: CourtAllocation; court_ids: string[] }) => Promise<void>;
@@ -169,7 +213,7 @@ export default function App() {
   const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
   const [tournaments, setTournaments] = useState<Tournament[]>([]); const [divisions, setDivisions] = useState<Division[]>([]);
   const [teams, setTeams] = useState<Team[]>([]); const [entries, setEntries] = useState<Entry[]>([]); const [matches, setMatches] = useState<Match[]>([]);
-  const [courts, setCourts] = useState<Court[]>([]); const [tournamentDays, setTournamentDays] = useState<TournamentDay[]>([]); const [divisionCourtRules, setDivisionCourtRules] = useState<DivisionCourtRule[]>([]);
+  const [courts, setCourts] = useState<Court[]>([]); const [tournamentDays, setTournamentDays] = useState<TournamentDay[]>([]); const [divisionCourtRules, setDivisionCourtRules] = useState<DivisionCourtRule[]>([]); const [scheduleSettings, setScheduleSettings] = useState<ScheduleSettings[]>([]);
   const [organisations, setOrganisations] = useState<Organisation[]>([]);
   const [players, setPlayers] = useState<Player[]>([]); const [rosters, setRosters] = useState<Roster[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]); const [goals, setGoals] = useState<Goal[]>([]);
@@ -178,7 +222,7 @@ export default function App() {
   const [scheduleView, setScheduleView] = useState<'draw' | 'table'>('draw');
   const [scoreStatus, setScoreStatus] = useState('all'); const [scoreDivision, setScoreDivision] = useState('');
   const [scoreCourt, setScoreCourt] = useState(''); const [scoreDay, setScoreDay] = useState(''); const [scoreSearch, setScoreSearch] = useState('');
-  const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false); const [showSetup, setShowSetup] = useState(false); const [showSignIn, setShowSignIn] = useState(false);
+  const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false); const [showSetup, setShowSetup] = useState(false); const [showSignIn, setShowSignIn] = useState(false); const [showTournamentEditor, setShowTournamentEditor] = useState(false);
   const [newTeam, setNewTeam] = useState({ name: '', organisation: '', colour: '#0891b2', group_name: 'A' });
   const [newPlayer, setNewPlayer] = useState({ name: '', entry: '' });
   const [manualStage, setManualStage] = useState('quarter_final');
@@ -242,6 +286,7 @@ export default function App() {
       setTournaments(data.tournaments); setDivisions(data.divisions); setTeams(data.teams); setEntries(data.entries);
       setMatches(data.matches); setOrganisations(data.organisations); setPlayers(data.players);
       setCourts(data.courts); setTournamentDays(data.tournament_days); setDivisionCourtRules(data.division_court_rules);
+      setScheduleSettings(data.schedule_settings);
       setRosters(data.rosters); setAttendance(data.attendance); setGoals(data.goals);
       setSelectedTournament(current => current && data.tournaments.some(item => item.id === current) ? current : data.tournaments[0]?.id || '');
     } catch (error) { fail(error); }
@@ -249,6 +294,7 @@ export default function App() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (session?.role === 'scorer') setTab('scoring'); }, [session?.role]);
   useEffect(() => { setSelectedDivision(current => divisions.some(item => item.id === current && item.tournament_id === selectedTournament) ? current : divisions.find(item => item.tournament_id === selectedTournament)?.id || ''); }, [selectedTournament, divisions]);
+  useEffect(() => { setShowTournamentEditor(false); }, [selectedTournament]);
   useEffect(() => { setScoreDivision(''); setScoreCourt(''); setScoreDay(''); setScoreSearch(''); }, [selectedTournament]);
   useEffect(() => { setNewTeam(current => ({ ...current, organisation: '' })); }, [selectedTournament]);
   async function save(action: () => Promise<any>) { setBusy(true); setMessage(''); try { await action(); await load(); setMessage('Saved'); } catch (error) { fail(error); } finally { setBusy(false); } }
@@ -385,6 +431,15 @@ export default function App() {
       await load(); setTab('schedule'); setMessage(result.summary);
     } catch (error) { fail(error); } finally { setBusy(false); }
   }
+  async function saveTournamentSettings(value: Record<string, unknown>) {
+    if (!tournament) return;
+    const hasScheduledMatches = tournamentMatches.some(match => match.scheduled_on && match.starts_at && match.court_id);
+    if (hasScheduledMatches && !window.confirm('Existing fixture times and courts will stay as they are. The updated game length and gaps will be used when you next generate a schedule. Save these changes?')) return;
+    setBusy(true); setMessage('');
+    try { await api(`tournaments/${tournament.id}/settings`, 'PATCH', value); await load(); setShowTournamentEditor(false); setMessage('Tournament settings saved.'); }
+    catch (error) { fail(error); }
+    finally { setBusy(false); }
+  }
   async function updateDivision(change: Partial<Division>) { if (!division) return; await save(() => api(`divisions/${division.id}`, 'PATCH', change)); }
   function matchStats(match: Match) {
     if (!canScore || !tournament?.record_goal_scorers || (!match.home_division_team_id && !match.away_division_team_id)) return null;
@@ -427,7 +482,8 @@ export default function App() {
     <main>
       <div className="topline"><div><span className="eyebrow">Events</span><h2>Tournaments</h2></div><div className="tournament-actions">{isAdmin && !!tournaments.length && <button onClick={() => setShowSetup(value => !value)}>{showSetup ? 'Close setup' : 'New tournament'}</button>}<select aria-label="Select tournament" value={selectedTournament} onChange={e => setSelectedTournament(e.target.value)}><option value="">Select tournament</option>{tournaments.map(item => <option key={item.id} value={item.id}>{item.name} · {item.starts_on}</option>)}</select></div></div>
       {isAdmin && (showSetup || !tournaments.length) && <TournamentSetup busy={busy} organisations={organisations} teams={teams} onCreate={createTournament}/>}
-      {tournament ? <><section className="eventhead"><div><span className="tag">{tournament.category} · {tournament.status}</span><h2>{tournament.name}</h2><p>{tournament.starts_on} to {tournament.ends_on}{tournament.venue ? ` · ${tournament.venue}` : ''} · {tournament.court_count} {tournament.court_count === 1 ? 'court' : 'courts'}</p><p className="scoring-mode">Scoring mode: <strong>{tournament.record_goal_scorers ? 'Team scores and goal scorers' : 'Team scores only'}</strong></p></div>{isAdmin && <label>Status<select value={tournament.status} onChange={e => save(() => api(`tournaments/${tournament.id}`, 'PATCH', { status: e.target.value }))}><option value="draft">Draft</option><option value="published">Published</option><option value="completed">Completed</option></select></label>}</section>
+      {tournament ? <><section className="eventhead"><div><span className="tag">{tournament.category} · {tournament.status}</span><h2>{tournament.name}</h2><p>{tournament.starts_on} to {tournament.ends_on}{tournament.venue ? ` · ${tournament.venue}` : ''} · {tournament.court_count} {tournament.court_count === 1 ? 'court' : 'courts'}</p><p className="scoring-mode">Scoring mode: <strong>{tournament.record_goal_scorers ? 'Team scores and goal scorers' : 'Team scores only'}</strong></p></div>{isAdmin && <div className="eventhead-actions"><button type="button" onClick={() => setShowTournamentEditor(value => !value)}>{showTournamentEditor ? 'Close editor' : 'Edit tournament'}</button><label>Status<select value={tournament.status} onChange={e => save(() => api(`tournaments/${tournament.id}`, 'PATCH', { status: e.target.value }))}><option value="draft">Draft</option><option value="published">Published</option><option value="completed">Completed</option></select></label></div>}</section>
+        {isAdmin && showTournamentEditor && <TournamentSettingsEditor tournament={tournament} settings={scheduleSettings.find(item => item.tournament_id === tournament.id)} busy={busy} onSave={saveTournamentSettings} onCancel={() => setShowTournamentEditor(false)}/>}
         <div className="divisionbar">{divisions.filter(item => item.tournament_id === tournament.id).map(item => <button className={selectedDivision === item.id ? 'active' : ''} key={item.id} onClick={() => setSelectedDivision(item.id)}>{item.name}</button>)}{isAdmin && <button onClick={() => { const name = prompt('New division name'); if (name?.trim()) save(() => api('divisions', 'POST', { tournament_id: tournament.id, name: name.trim() })); }}>+ Division</button>}</div>
         {tab === 'scoring' && session && <section className="scoring-workspace">
           <div className="scoring-heading"><div><span className="eyebrow">Poolside scoring</span><h2>Match centre</h2><p>Find a fixture, start play, and record the final score.</p></div><span className="scoring-count">{scoringMatches.length} matches</span></div>

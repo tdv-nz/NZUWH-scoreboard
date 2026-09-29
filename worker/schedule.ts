@@ -6,7 +6,7 @@ type Day = { day_on: string; available: number };
 type Break = { day_on: string; starts_at: string; ends_at: string; label: string };
 type Availability = { court_id: string; day_on: string; starts_at: string; ends_at: string };
 type Rule = { division_id: string; court_id: string; allocation_type: 'required' | 'preferred'; preference_order: number };
-type Settings = { match_duration_minutes: number; halftime_minutes: number; gap_between_games_minutes: number; team_turnaround_minutes: number };
+type Settings = { match_duration_minutes: number; half_duration_minutes: number; halftime_minutes: number; gap_between_games_minutes: number; team_turnaround_minutes: number };
 type TeamEntry = { id: string; division_id: string; division_name: string; group_count: number; group_name: string; name: string };
 type Match = {
   id: string; division_id: string; stage: string; match_number: number | null; status: string;
@@ -33,7 +33,7 @@ const dayNumber = (value: string) => Math.floor(Date.parse(`${value}T00:00:00Z`)
 const absoluteMinute = (day: string, minute: number) => dayNumber(day) * 1440 + minute;
 const fmtTime = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 const teamsFor = (match: Match) => [match.home_division_team_id, match.away_division_team_id].filter((value): value is string => !!value);
-const playingDuration = (settings: Settings) => settings.match_duration_minutes + settings.halftime_minutes;
+const playingDuration = (settings: Settings) => settings.half_duration_minutes * 2 + settings.halftime_minutes;
 
 async function contextFor(env: Env, tournamentId: string): Promise<Context> {
   const tournament = await q(env, 'SELECT id,starts_on,ends_on FROM tournaments WHERE id=?', tournamentId).first<Tournament>();
@@ -44,7 +44,7 @@ async function contextFor(env: Env, tournamentId: string): Promise<Context> {
     q(env, 'SELECT d.day_on,b.starts_at,b.ends_at,b.label FROM day_breaks b JOIN tournament_days d ON d.id=b.tournament_day_id WHERE d.tournament_id=? ORDER BY d.day_on,b.starts_at', tournamentId).all<Break>(),
     q(env, 'SELECT court_id,day_on,starts_at,ends_at FROM court_availability WHERE tournament_id=? ORDER BY day_on,starts_at', tournamentId).all<Availability>(),
     q(env, 'SELECT r.division_id,r.court_id,r.allocation_type,r.preference_order FROM division_court_rules r JOIN divisions d ON d.id=r.division_id WHERE d.tournament_id=? ORDER BY r.division_id,r.preference_order', tournamentId).all<Rule>(),
-    q(env, 'SELECT match_duration_minutes,halftime_minutes,gap_between_games_minutes,team_turnaround_minutes FROM schedule_settings WHERE tournament_id=?', tournamentId).first<Settings>(),
+    q(env, 'SELECT match_duration_minutes,half_duration_minutes,halftime_minutes,gap_between_games_minutes,team_turnaround_minutes FROM schedule_settings WHERE tournament_id=?', tournamentId).first<Settings>(),
     q(env, `SELECT m.*,d.tournament_id FROM matches m JOIN divisions d ON d.id=m.division_id WHERE d.tournament_id=? ORDER BY m.match_number,m.id`, tournamentId).all<Match>(),
     q(env, `SELECT dt.id,dt.division_id,d.name AS division_name,d.group_count,dt.group_name,t.name
       FROM division_teams dt JOIN divisions d ON d.id=dt.division_id JOIN teams t ON t.id=dt.team_id
@@ -53,7 +53,7 @@ async function contextFor(env: Env, tournamentId: string): Promise<Context> {
   return {
     tournament, courts: courts.results, days: days.results, breaks: breaks.results,
     availability: availability.results, rules: rules.results,
-    settings: settings || { match_duration_minutes: 20, halftime_minutes: 2, gap_between_games_minutes: 0, team_turnaround_minutes: 20 },
+    settings: settings || { match_duration_minutes: 20, half_duration_minutes: 10, halftime_minutes: 2, gap_between_games_minutes: 0, team_turnaround_minutes: 20 },
     matches: matches.results, teamEntries: teamEntries.results,
   };
 }
