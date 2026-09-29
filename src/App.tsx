@@ -293,11 +293,29 @@ export default function App() {
     const goal = goals.find(row => row.match_id === matchId && row.player_id === playerId);
     if (goal) await save(() => api(`goals/${goal.id}`, 'DELETE'));
   }
-  async function generateDraw() { if (!division || !tournament) return; if (divisionMatches.some(match => match.stage === 'group')) { setMessage('Group fixtures already exist. Edit them below.'); return; } if (divisionEntries.length < 2) { setMessage('Add at least two teams first.'); return; }
-    const offset = Math.max(0, ...tournamentMatches.map(match => match.match_number || 0));
+  async function generateDraw() {
+    if (!tournament) return;
+    const tournamentDivisions = divisions.filter(item => item.tournament_id === tournament.id);
     const firstPlayingDay = tournamentDays.filter(day => day.tournament_id === tournament.id && day.available).sort((a, b) => a.day_on.localeCompare(b.day_on))[0]?.day_on || tournament.starts_on;
-    const fixtures = createGroupDraw(division.id, divisionEntries, division.round_robins as 1 | 2, firstPlayingDay).map((fixture, index) => ({ ...fixture, match_number: offset + index + 1, court_id: null }));
-    await save(() => api('matches', 'POST', { matches: fixtures })); setTab('draw'); }
+    let nextMatchNumber = Math.max(0, ...tournamentMatches.map(match => match.match_number || 0)) + 1;
+    const fixtures: Array<ReturnType<typeof createGroupDraw>[number] & { match_number: number; court_id: null }> = [];
+    const created: string[] = [];
+    const skipped: string[] = [];
+    for (const item of tournamentDivisions) {
+      const itemMatches = matches.filter(match => match.division_id === item.id);
+      if (itemMatches.length) { skipped.push(`${item.name} already has fixtures`); continue; }
+      const itemEntries = entries.filter(entry => entry.division_id === item.id);
+      if (itemEntries.length < 2) { skipped.push(`${item.name} needs at least two teams`); continue; }
+      const draw = createGroupDraw(item.id, itemEntries, item.round_robins as 1 | 2, firstPlayingDay);
+      if (!draw.length) { skipped.push(`${item.name} has no pool pairings`); continue; }
+      for (const fixture of draw) fixtures.push({ ...fixture, match_number: nextMatchNumber++, court_id: null });
+      created.push(item.name);
+    }
+    if (!fixtures.length) { setMessage(`No new pool draws created. ${skipped.join('; ') || 'Add divisions and teams first.'}`); return; }
+    await save(() => api('matches', 'POST', { matches: fixtures }));
+    setTab('draw');
+    setMessage(`Created pool draws for ${created.join(', ')}. Generate the tournament schedule to assign times and courts.${skipped.length ? ` Skipped: ${skipped.join('; ')}.` : ''}`);
+  }
   async function addFinal() { if (!division) return; await save(() => api('matches', 'POST', { matches: [{ division_id: division.id, stage: manualStage, scheduled_on: tournament?.ends_on, match_number: Math.max(0, ...tournamentMatches.map(match => match.match_number || 0)) + 1, home_placeholder: 'Seed / winner TBC', away_placeholder: 'Seed / winner TBC' }] })); }
   async function generateFinals() {
     if (!division || !tournament) return;
@@ -423,7 +441,7 @@ export default function App() {
           {tab === 'teams' && <section className="panel"><h3>Teams and pools</h3>{isAdmin && !divisionMatches.some(match => match.stage === 'group') && <form className="inlineform" onSubmit={addTeam}><input placeholder="Team name" value={newTeam.name} onChange={e => setNewTeam({ ...newTeam, name: e.target.value })} required/><input list="existing-organisations" required placeholder={organisationLabel} aria-label={organisationLabel} value={newTeam.organisation} onChange={e => setNewTeam({ ...newTeam, organisation: e.target.value })}/><datalist id="existing-organisations">{organisations.filter(item => item.kind === organisationKind).map(item => <option key={item.id} value={item.name}/>)}{organisationKind === 'region' && ['Northern', 'Central', 'Southern'].map(name => <option value={name} key={name}/>)}</datalist><input type="color" title="Team colour" value={newTeam.colour} onChange={e => setNewTeam({ ...newTeam, colour: e.target.value })}/>{division.group_count === 2 && <select value={newTeam.group_name} onChange={e => setNewTeam({ ...newTeam, group_name: e.target.value })}><option value="A">Pool A</option><option value="B">Pool B</option></select>}<button disabled={busy}>Add team</button></form>}<div className="tablewrap"><table><thead><tr><th>Team</th><th>{organisationLabel}</th><th>Pool</th><th>Seed</th></tr></thead><tbody>{divisionEntries.map(entry => { const team = teams.find(item => item.id === entry.team_id); return <tr key={entry.id}><td><i className="swatch" style={{ background: entry.team_colour || team?.colour || '#94a3b8' }}/>{team?.name}</td><td>{organisationName(team)}</td><td>{isAdmin && division.group_count === 2 ? <select value={entry.group_name || 'A'} disabled={divisionMatches.some(match => match.stage === 'group')} onChange={e => save(() => api(`division_teams/${entry.id}`, 'PATCH', { group_name: e.target.value, seed: null }))}><option>A</option><option>B</option></select> : entry.group_name || 'A'}</td><td>{entry.seed || '—'}</td></tr>; })}</tbody></table></div></section>}
           {tab === 'players' && session && <section className="panel"><h3>Team rosters</h3>{isAdmin && <form className="inlineform" onSubmit={addPlayer}><input placeholder="Player name" value={newPlayer.name} onChange={e => setNewPlayer({ ...newPlayer, name: e.target.value })} required/><select value={newPlayer.entry} onChange={e => setNewPlayer({ ...newPlayer, entry: e.target.value })} required><option value="">Choose team</option>{divisionEntries.map(entry => <option key={entry.id} value={entry.id}>{teamName(entry.id)}</option>)}</select><button disabled={busy}>Add player</button></form>}<div className="tablewrap"><table><thead><tr><th>Team</th><th>Player</th></tr></thead><tbody>{rosters.filter(roster => divisionEntries.some(entry => entry.id === roster.division_team_id)).sort((a,b) => teamName(a.division_team_id).localeCompare(teamName(b.division_team_id))).map(roster => <tr key={roster.id}><td>{teamName(roster.division_team_id)}</td><td>{players.find(player => player.id === roster.player_id)?.name}</td></tr>)}</tbody></table></div></section>}
           {tab === 'draw' && <section className="panel">
-            <div className="sectiontitle"><div><h3>Draw and results</h3><p>Dates and court times can be adjusted for the tournament programme.</p></div>{isAdmin && !divisionMatches.some(m => m.stage === 'group') && <button onClick={generateDraw} disabled={busy}>Generate pool draw</button>}</div>
+            <div className="sectiontitle"><div><h3>Draw and results</h3><p>Create pool fixtures across all grades, then schedule the tournament across its courts.</p></div>{isAdmin && <button onClick={generateDraw} disabled={busy}>Generate missing pool draws for all grades</button>}</div>
             {isAdmin && <div className="inlineform secondary">{division.finals_format !== 'none' && division.finals_format !== 'manual' && <button onClick={generateFinals} disabled={busy || !divisionMatches.some(m => m.stage === 'group')}>Generate seeded finals</button>}<select value={manualStage} onChange={e => setManualStage(e.target.value)}><option value="quarter_final">Quarter-final</option><option value="semi_final">Semi-final</option><option value="placement">Placing match</option><option value="final">Final</option></select><button onClick={addFinal}>+ Add knockout / placing game</button></div>}
             <div className="fixtures">{divisionMatches.map(match => <article className="fixture" key={match.id}>
               <div className="fixturemeta"><span className="tag">{match.stage.replace('_', ' ')}</span><span>#{match.match_number || '—'}</span>{isAdmin ? <>
