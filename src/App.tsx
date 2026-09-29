@@ -18,7 +18,7 @@ type OrganiserAccount = { id: string; email: string; role: 'admin' | 'scorer'; c
 type Roster = { id: string; division_team_id: string; player_id: string };
 type Attendance = { match_id: string; player_id: string };
 type Goal = { id: string; match_id: string; player_id: string | null; division_team_id: string };
-type Match = { id: string; division_id: string; stage: string; round_number: number | null; match_number: number | null; scheduled_on: string | null; starts_at: string | null; court_id: string | null; court: string | null; referee: string | null; home_division_team_id: string | null; away_division_team_id: string | null; home_placeholder: string | null; away_placeholder: string | null; home_score: number | null; away_score: number | null; status: string; schedule_issue: string | null; schedule_warning: string | null };
+type Match = { id: string; division_id: string; stage: string; round_number: number | null; match_number: number | null; scheduled_on: string | null; starts_at: string | null; court_id: string | null; court: string | null; referee: string | null; home_division_team_id: string | null; away_division_team_id: string | null; home_placeholder: string | null; away_placeholder: string | null; home_score: number | null; away_score: number | null; status: string; schedule_issue: string | null; schedule_warning: string | null; schedule_manually_adjusted: number };
 
 function TournamentDrawSheet({ tournament, matches, divisions, courts, days, entries, teams }: {
   tournament: Tournament; matches: Match[]; divisions: Division[]; courts: Court[]; days: TournamentDay[]; entries: Entry[]; teams: Team[];
@@ -92,7 +92,7 @@ function ScoringMatchCard({ match, divisionName, homeName, awayName, homeColour,
   </article>;
 }
 
-function MatchScheduleEditor({ match, courts, busy, onSave }: { match: Match; courts: Court[]; busy: boolean; onSave: (change: Partial<Match>) => Promise<void> }) {
+function MatchScheduleEditor({ match, courts, busy, onSave, onUnlock }: { match: Match; courts: Court[]; busy: boolean; onSave: (change: Partial<Match>) => Promise<void>; onUnlock: () => Promise<void> }) {
   const [draft, setDraft] = useState({ scheduled_on: match.scheduled_on || '', starts_at: match.starts_at?.slice(0, 5) || '', court_id: match.court_id || '' });
   useEffect(() => setDraft({ scheduled_on: match.scheduled_on || '', starts_at: match.starts_at?.slice(0, 5) || '', court_id: match.court_id || '' }), [match.scheduled_on, match.starts_at, match.court_id]);
   const locked = match.status !== 'scheduled';
@@ -103,6 +103,7 @@ function MatchScheduleEditor({ match, courts, busy, onSave }: { match: Match; co
     <button type="button" disabled={busy || locked} onClick={() => onSave({ scheduled_on: draft.scheduled_on || null, starts_at: draft.starts_at || null, court_id: draft.court_id || null, court: null })}>Save slot</button>
     {match.schedule_issue && <span className="schedule-issue">{match.schedule_issue}</span>}
     {match.schedule_warning && <span className="schedule-warning">{match.schedule_warning}</span>}
+    {match.schedule_manually_adjusted === 1 && <span className="schedule-manual">Organiser adjusted · protected from schedule rebuilds <button type="button" disabled={busy} onClick={() => { if (window.confirm('Allow the next schedule rebuild to move this fixture?')) onUnlock(); }}>Include in next rebuild</button></span>}
   </div>;
 }
 
@@ -372,6 +373,9 @@ export default function App() {
       }
     });
   }
+  async function unlockMatchSchedule(match: Match) {
+    await save(() => api(`matches/${match.id}/schedule-auto`, 'POST', {}));
+  }
   async function scoreMatch(match: Match, change: Partial<Match>) { await save(() => api(`matches/${match.id}`, 'PATCH', change)); }
   async function generateSchedule() {
     if (!tournament) return;
@@ -445,7 +449,7 @@ export default function App() {
             {isAdmin && <div className="inlineform secondary">{division.finals_format !== 'none' && division.finals_format !== 'manual' && <button onClick={generateFinals} disabled={busy || !divisionMatches.some(m => m.stage === 'group')}>Generate seeded finals</button>}<select value={manualStage} onChange={e => setManualStage(e.target.value)}><option value="quarter_final">Quarter-final</option><option value="semi_final">Semi-final</option><option value="placement">Placing match</option><option value="final">Final</option></select><button onClick={addFinal}>+ Add knockout / placing game</button></div>}
             <div className="fixtures">{divisionMatches.map(match => <article className="fixture" key={match.id}>
               <div className="fixturemeta"><span className="tag">{match.stage.replace('_', ' ')}</span><span>#{match.match_number || '—'}</span>{isAdmin ? <>
-                <MatchScheduleEditor match={match} courts={courts.filter(court => court.tournament_id === tournament.id && court.active)} busy={busy} onSave={change => updateMatch(match, change)}/>
+                <MatchScheduleEditor match={match} courts={courts.filter(court => court.tournament_id === tournament.id && court.active)} busy={busy} onSave={change => updateMatch(match, change)} onUnlock={() => unlockMatchSchedule(match)}/>
                 <input placeholder="Referee" defaultValue={match.referee || ''} onBlur={e => { if (e.target.value !== (match.referee || '')) updateMatch(match, { referee: e.target.value }); }}/>
               </> : <span>{match.scheduled_on} {match.starts_at?.slice(0,5)} {courtName(match.court_id, match.court)} · {match.referee}</span>}</div>
               <div className="fixturebody"><div className="side" style={{ borderColor: teamColour(match.home_division_team_id) }}>{isAdmin ? <select value={match.home_division_team_id || ''} disabled={match.status === 'completed' || attendance.some(row => row.match_id === match.id)} onChange={e => updateMatch(match, { home_division_team_id: e.target.value || null })}><option value="">{match.home_placeholder || 'Select team'}</option>{divisionEntries.map(entry => <option value={entry.id} key={entry.id}>{teamName(entry.id)}</option>)}</select> : teamName(match.home_division_team_id) === 'TBC' ? match.home_placeholder || 'TBC' : teamName(match.home_division_team_id)}</div><span className="versus">v</span><div className="side" style={{ borderColor: teamColour(match.away_division_team_id) }}>{isAdmin ? <select value={match.away_division_team_id || ''} disabled={match.status === 'completed' || attendance.some(row => row.match_id === match.id)} onChange={e => updateMatch(match, { away_division_team_id: e.target.value || null })}><option value="">{match.away_placeholder || 'Select team'}</option>{divisionEntries.map(entry => <option value={entry.id} key={entry.id}>{teamName(entry.id)}</option>)}</select> : teamName(match.away_division_team_id) === 'TBC' ? match.away_placeholder || 'TBC' : teamName(match.away_division_team_id)}</div>{canScore ? <div className="scoreedit"><input type="number" min="0" placeholder="H" defaultValue={match.home_score ?? ''} id={`h-${match.id}`}/><span>:</span><input type="number" min="0" placeholder="A" defaultValue={match.away_score ?? ''} id={`a-${match.id}`}/><button onClick={() => { const h = (document.getElementById(`h-${match.id}`) as HTMLInputElement).value; const a = (document.getElementById(`a-${match.id}`) as HTMLInputElement).value; if (!match.home_division_team_id || !match.away_division_team_id || h === '' || a === '') { setMessage('Select both teams and enter both scores.'); return; } if (match.stage !== 'group' && h === a) { setMessage('Enter the decided knockout result so the winner can advance.'); return; } if (match.status === 'completed' && !window.confirm('This result is already complete. Save the corrected score?')) return; updateMatch(match, { home_score: Number(h), away_score: Number(a), status: 'completed' }); }}>Save score</button></div> : <strong className="score">{match.status === 'completed' ? `${match.home_score} : ${match.away_score}` : '—'}</strong>}</div>{matchStats(match)}

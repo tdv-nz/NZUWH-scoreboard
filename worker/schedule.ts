@@ -7,18 +7,21 @@ type Break = { day_on: string; starts_at: string; ends_at: string; label: string
 type Availability = { court_id: string; day_on: string; starts_at: string; ends_at: string };
 type Rule = { division_id: string; court_id: string; allocation_type: 'required' | 'preferred'; preference_order: number };
 type Settings = { match_duration_minutes: number; halftime_minutes: number; gap_between_games_minutes: number; team_turnaround_minutes: number };
+type TeamEntry = { id: string; division_id: string; division_name: string; group_count: number; group_name: string; name: string };
 type Match = {
   id: string; division_id: string; stage: string; match_number: number | null; status: string;
   scheduled_on: string | null; starts_at: string | null; court_id: string | null; court: string | null;
   home_division_team_id: string | null; away_division_team_id: string | null;
   home_source_match_id: string | null; away_source_match_id: string | null;
   home_score: number | null; away_score: number | null;
+  referee: string | null;
+  schedule_manually_adjusted: number;
 };
 type Context = {
   tournament: Tournament; courts: Court[]; days: Day[]; breaks: Break[]; availability: Availability[];
-  rules: Rule[]; settings: Settings; matches: Match[];
+  rules: Rule[]; settings: Settings; matches: Match[]; teamEntries: TeamEntry[];
 };
-type Assignment = { match: Match; day_on: string; starts_at: string; court: Court };
+type Assignment = { match: Match; day_on: string; starts_at: string; start: number; court: Court };
 type Interval = { match_id: string; start: number; end: number; teamIds: string[]; courtId: string };
 type Slot = { day_on: string; starts_at: string; minute: number; start: number; court: Court };
 
@@ -35,7 +38,7 @@ const playingDuration = (settings: Settings) => settings.match_duration_minutes 
 async function contextFor(env: Env, tournamentId: string): Promise<Context> {
   const tournament = await q(env, 'SELECT id,starts_on,ends_on FROM tournaments WHERE id=?', tournamentId).first<Tournament>();
   if (!tournament) throw new ApiError(404, 'Tournament not found');
-  const [courts, days, breaks, availability, rules, settings, matches] = await Promise.all([
+  const [courts, days, breaks, availability, rules, settings, matches, teamEntries] = await Promise.all([
     q(env, 'SELECT id,display_name,display_order,active FROM courts WHERE tournament_id=? ORDER BY display_order', tournamentId).all<Court>(),
     q(env, 'SELECT day_on,available FROM tournament_days WHERE tournament_id=? ORDER BY day_on', tournamentId).all<Day>(),
     q(env, 'SELECT d.day_on,b.starts_at,b.ends_at,b.label FROM day_breaks b JOIN tournament_days d ON d.id=b.tournament_day_id WHERE d.tournament_id=? ORDER BY d.day_on,b.starts_at', tournamentId).all<Break>(),
@@ -43,13 +46,113 @@ async function contextFor(env: Env, tournamentId: string): Promise<Context> {
     q(env, 'SELECT r.division_id,r.court_id,r.allocation_type,r.preference_order FROM division_court_rules r JOIN divisions d ON d.id=r.division_id WHERE d.tournament_id=? ORDER BY r.division_id,r.preference_order', tournamentId).all<Rule>(),
     q(env, 'SELECT match_duration_minutes,halftime_minutes,gap_between_games_minutes,team_turnaround_minutes FROM schedule_settings WHERE tournament_id=?', tournamentId).first<Settings>(),
     q(env, `SELECT m.*,d.tournament_id FROM matches m JOIN divisions d ON d.id=m.division_id WHERE d.tournament_id=? ORDER BY m.match_number,m.id`, tournamentId).all<Match>(),
+    q(env, `SELECT dt.id,dt.division_id,d.name AS division_name,d.group_count,dt.group_name,t.name
+      FROM division_teams dt JOIN divisions d ON d.id=dt.division_id JOIN teams t ON t.id=dt.team_id
+      WHERE d.tournament_id=? ORDER BY d.name,dt.group_name,dt.seed,t.name`, tournamentId).all<TeamEntry>(),
   ]);
   return {
     tournament, courts: courts.results, days: days.results, breaks: breaks.results,
     availability: availability.results, rules: rules.results,
     settings: settings || { match_duration_minutes: 20, halftime_minutes: 2, gap_between_games_minutes: 0, team_turnaround_minutes: 20 },
-    matches: matches.results,
+    matches: matches.results, teamEntries: teamEntries.results,
   };
+}
+
+function refereeTeamLabel(team: TeamEntry) {
+  const firstWord = team.division_name.trim().split(/\s+/)[0] || 'Team';
+  const divisionCode = /^premier$/i.test(firstWord) ? 'Prem' : firstWord;
+  const poolCode = team.group_count === 2 ? team.group_name === 'A' ? '1' : '2' : '';
+  return `${divisionCode}${poolCode} ${team.name}`;
+}
+
+function intervalRest(start: number, end: number, other: { start: number; end: number }) {
+  if (start < other.end && other.start < end) return -1;
+  if (end <= other.start) return other.start - end;
+  return start - other.end;
+}
+
+function byeTeamForQuarterFinal(context: Context, match: Match): string | null {
+  if (match.stage !== 'quarter_final') return null;
+  const semi = context.matches.find(item => item.division_id === match.division_id && item.stage === 'semi_final'
+    && (item.home_source_match_id === match.id || item.away_source_match_id === match.id));
+  if (!semi) return null;
+  if (semi.home_source_match_id === match.id) return semi.away_division_team_id;
+  return semi.home_division_team_id;
+}
+
+function assignReferees(context: Context, matchesToPlace: Match[], assignments: Assignment[], turnaround: number) {
+  const byAssignment = new Map(assignments.map(assignment => [assignment.match.id, assignment]));
+  const targetIds = new Set(matchesToPlace.map(match => match.id));
+  const labelById = new Map(context.teamEntries.map(team => [team.id, refereeTeamLabel(team)]));
+  const normalized = (value: string) => value.trim().toLocaleLowerCase();
+  const teamForReferee = new Map<string, string>();
+  for (const team of context.teamEntries) {
+    teamForReferee.set(normalized(refereeTeamLabel(team)), team.id);
+    if (!teamForReferee.has(normalized(team.name))) teamForReferee.set(normalized(team.name), team.id);
+  }
+  const dutyCount = new Map(context.teamEntries.map(team => [team.id, 0]));
+  const gameEvents: Array<{ start: number; end: number; teamIds: string[] }> = [];
+  const refereeEvents: Array<{ teamId: string; start: number; end: number }> = [];
+  for (const match of context.matches) {
+    const assignment = byAssignment.get(match.id);
+    if (targetIds.has(match.id) && !assignment) continue;
+    const day = assignment?.day_on || match.scheduled_on;
+    const time = assignment?.starts_at || match.starts_at;
+    if (!day || !time || !validDate(day) || !validTime(time)) continue;
+    const start = absoluteMinute(day, minutesOf(time)); const end = start + playingDuration(context.settings);
+    gameEvents.push({ start, end, teamIds: teamsFor(match) });
+    const assignedTeam = match.referee ? teamForReferee.get(normalized(match.referee)) : undefined;
+    if (assignedTeam) {
+      dutyCount.set(assignedTeam, (dutyCount.get(assignedTeam) || 0) + 1);
+      refereeEvents.push({ teamId: assignedTeam, start, end });
+    }
+  }
+
+  const scheduled = assignments.filter(assignment => !assignment.match.referee?.trim()).sort((a, b) => a.start - b.start
+    || a.court.display_order - b.court.display_order || (a.match.match_number || 0) - (b.match.match_number || 0));
+  const result = new Map<string, string>();
+  const unassigned = new Set<string>();
+  const preferredRest = Math.max(60, turnaround);
+
+  for (const assignment of scheduled) {
+    const match = assignment.match;
+    const start = assignment.start; const end = start + playingDuration(context.settings);
+    const playing = new Set(teamsFor(match));
+    const candidates = context.teamEntries.filter(team => !playing.has(team.id));
+    const sameDivision = candidates.filter(team => team.division_id === match.division_id);
+    const byeTeam = byeTeamForQuarterFinal(context, match);
+    const getRest = (teamId: string) => {
+      const rests = [
+        ...gameEvents.filter(event => event.teamIds.includes(teamId)).map(event => intervalRest(start, end, event)),
+        ...refereeEvents.filter(event => event.teamId === teamId).map(event => intervalRest(start, end, event)),
+      ];
+      return rests.length ? Math.min(...rests) : Number.POSITIVE_INFINITY;
+    };
+    const choose = (pool: TeamEntry[]) => [...pool].sort((a, b) => {
+      const dutyDifference = (dutyCount.get(a.id) || 0) - (dutyCount.get(b.id) || 0);
+      if (dutyDifference) return dutyDifference;
+      const restA = getRest(a.id); const restB = getRest(b.id);
+      if (restA !== restB) return restB > restA ? 1 : -1;
+      return a.id.localeCompare(b.id);
+    })[0];
+
+    let selected: TeamEntry | undefined;
+    const byeCandidate = sameDivision.find(team => team.id === byeTeam);
+    if (byeCandidate && getRest(byeCandidate.id) >= preferredRest) selected = byeCandidate;
+    if (!selected) selected = choose(sameDivision.filter(team => getRest(team.id) >= preferredRest));
+    if (!selected) selected = choose(candidates.filter(team => getRest(team.id) >= preferredRest));
+    if (!selected) selected = choose(sameDivision.filter(team => getRest(team.id) >= turnaround));
+    if (!selected) selected = choose(candidates.filter(team => getRest(team.id) >= turnaround));
+    if (!selected) selected = choose(sameDivision.filter(team => getRest(team.id) >= 0));
+    if (!selected) selected = choose(candidates.filter(team => getRest(team.id) >= 0));
+    if (!selected) { unassigned.add(match.id); continue; }
+
+    const label = labelById.get(selected.id)!;
+    result.set(match.id, label);
+    dutyCount.set(selected.id, (dutyCount.get(selected.id) || 0) + 1);
+    refereeEvents.push({ teamId: selected.id, start, end });
+  }
+  return { referees: result, unassigned };
 }
 
 function ruleFor(context: Context, divisionId: string) {
@@ -107,8 +210,8 @@ export async function generateSchedule(env: Env, tournamentId: string): Promise<
   const hasResults = context.matches.some(match => match.status !== 'scheduled' || match.home_score !== null || match.away_score !== null);
   const matchesToPlace = hasResults
     ? context.matches.filter(match => match.status === 'scheduled' && match.home_score === null && match.away_score === null
-      && (!match.scheduled_on || !match.starts_at || !match.court_id))
-    : context.matches;
+      && !match.schedule_manually_adjusted && (!match.scheduled_on || !match.starts_at || !match.court_id))
+    : context.matches.filter(match => !match.schedule_manually_adjusted);
   if (hasResults && !matchesToPlace.length) {
     throw new ApiError(409, 'The schedule cannot be rebuilt after a match has started or a result has been recorded.');
   }
@@ -154,10 +257,12 @@ export async function generateSchedule(env: Env, tournamentId: string): Promise<
   const teamAssignments = new Map<string, Interval[]>();
   const dayCounts = new Map<string, number>();
   const placedEnds = new Map<string, number>();
-  if (hasResults) {
+  {
     const targets = new Set(matchesToPlace.map(match => match.id));
     for (const interval of currentIntervals(context)) {
       if (targets.has(interval.match_id)) continue;
+      const reservedMatch = context.matches.find(match => match.id === interval.match_id);
+      if (!hasResults && !reservedMatch?.schedule_manually_adjusted) continue;
       courtAssignments.set(interval.courtId, [...(courtAssignments.get(interval.courtId) || []), interval]);
       placedEnds.set(interval.match_id, interval.end);
       for (const teamId of interval.teamIds) teamAssignments.set(teamId, [...(teamAssignments.get(teamId) || []), interval]);
@@ -170,6 +275,7 @@ export async function generateSchedule(env: Env, tournamentId: string): Promise<
   const duration = playingDuration(context.settings);
   const gap = context.settings.gap_between_games_minutes;
   const turnaround = context.settings.team_turnaround_minutes;
+  const preferredTeamRest = Math.max(60, turnaround);
   const progressionBarrier = (match: Match) => {
     const divisionGames = context.matches.filter(item => item.division_id === match.division_id);
     const dependencies = [match.home_source_match_id, match.away_source_match_id].filter((item): item is string => !!item);
@@ -194,11 +300,18 @@ export async function generateSchedule(env: Env, tournamentId: string): Promise<
       if (courtOccupied.some(other => courtConflict(candidate.start, duration, other, gap))) { blockedByCourt++; continue; }
       const candidateTeams = candidate.teamIds.flatMap(team => teamAssignments.get(team) || []);
       if (candidateTeams.some(other => teamTurnaroundConflict(candidate.start, duration, other, turnaround))) { blockedByTurnaround++; continue; }
+      // Keep a comfortable gap between a team's games when the tournament grid allows it.
+      // This is a preference, so compact schedules can still use the configured hard turnaround.
+      const teamRestPenalty = candidateTeams.reduce((penalty, other) => {
+        const rest = candidate.start >= other.end ? candidate.start - other.end
+          : other.start >= candidate.end ? other.start - candidate.end : 0;
+        return penalty + Math.max(0, preferredTeamRest - rest) * 500;
+      }, 0);
       const rules = rulesByDivision.get(match.division_id) || [];
       const preferenceRank = rules.length && rules[0].allocation_type === 'preferred' ? rankFor(match, slot.court.id) : 0;
       const teamDayLoad = candidate.teamIds.reduce((sum, team) => sum + (teamAssignments.get(team) || []).filter(item => Math.floor(item.start / 1440) === Math.floor(candidate.start / 1440)).length, 0);
       const adjacent = candidateTeams.some(other => Math.abs(candidate.start - other.end) < 5 || Math.abs(other.start - candidate.end) < 5);
-      const score = preferenceRank * 100_000 + (dayCounts.get(slot.day_on) || 0) * 30 + teamDayLoad * 8
+      const score = preferenceRank * 100_000 + teamRestPenalty + (dayCounts.get(slot.day_on) || 0) * 30 + teamDayLoad * 8
         + (adjacent ? 5_000 : 0) + slot.minute * 0.01 + slot.court.display_order * 0.001;
       if (score < bestScore) { bestScore = score; selected = slot; }
     }
@@ -217,7 +330,7 @@ export async function generateSchedule(env: Env, tournamentId: string): Promise<
       unscheduled.push({ match_id: match.id, reason });
       continue;
     }
-    const assignment = { match, day_on: selected.day_on, starts_at: selected.starts_at, court: selected.court };
+    const assignment = { match, day_on: selected.day_on, starts_at: selected.starts_at, start: selected.start, court: selected.court };
     const interval: Interval = { match_id: match.id, start: selected.start, end: selected.start + duration, teamIds: teamsFor(match), courtId: selected.court.id };
     assignments.push(assignment);
     placedEnds.set(match.id, interval.end);
@@ -228,25 +341,37 @@ export async function generateSchedule(env: Env, tournamentId: string): Promise<
 
   const issueByMatch = new Map(unscheduled.map(item => [item.match_id, item.reason]));
   const assignmentByMatch = new Map(assignments.map(item => [item.match.id, item]));
+  const refereePlan = assignReferees(context, matchesToPlace, assignments, turnaround);
   const warningsByMatch = new Map<string, string | null>();
   const statements = matchesToPlace.map(match => {
     const assignment = assignmentByMatch.get(match.id);
     const issue = issueByMatch.get(match.id) || null;
     const rules = rulesByDivision.get(match.division_id) || [];
-    const warning = assignment && rules[0]?.allocation_type === 'preferred' && !rules.some(rule => rule.court_id === assignment.court.id)
-      ? `Preferred courts were unavailable; scheduled on ${assignment.court.display_name}.` : null;
+    const warningParts = [];
+    if (assignment && rules[0]?.allocation_type === 'preferred' && !rules.some(rule => rule.court_id === assignment.court.id)) {
+      warningParts.push(`Preferred courts were unavailable; scheduled on ${assignment.court.display_name}.`);
+    }
+    if (assignment && !refereePlan.referees.has(match.id) && !match.referee?.trim()) {
+      warningParts.push('No eligible team could be assigned to referee.');
+    }
+    const warning = warningParts.length ? warningParts.join(' ') : null;
     warningsByMatch.set(match.id, warning);
-    return q(env, `UPDATE matches SET scheduled_on=?,starts_at=?,court_id=?,court=?,schedule_issue=?,schedule_warning=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+    return q(env, `UPDATE matches SET scheduled_on=?,starts_at=?,court_id=?,court=?,schedule_issue=?,schedule_warning=?,
+      referee=CASE WHEN referee IS NULL OR trim(referee)='' THEN ? ELSE referee END,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
       assignment?.day_on ?? null, assignment?.starts_at ?? null, assignment?.court.id ?? null, assignment?.court.display_name ?? null,
-      issue, warning, match.id);
+      issue, warning, refereePlan.referees.get(match.id) ?? null, match.id);
   });
   await env.DB.batch(statements);
+  const refereeAssigned = refereePlan.referees.size;
+  const refereeMissing = refereePlan.unassigned.size;
+  const scheduleSummary = hasResults
+    ? `Scheduled ${assignments.length} new fixtures; ${unscheduled.length} still need attention.`
+    : `${assignments.length} of ${context.matches.length} matches scheduled; ${unscheduled.length} need attention.`;
   return json({
     total: matchesToPlace.length, scheduled: assignments.length, unscheduled,
     fallbacks: [...warningsByMatch.values()].filter(Boolean).length,
-    summary: hasResults
-      ? `Scheduled ${assignments.length} new fixtures; ${unscheduled.length} still need attention.`
-      : `${assignments.length} of ${context.matches.length} matches scheduled; ${unscheduled.length} need attention.`,
+    referee_assigned: refereeAssigned, referee_unassigned: refereeMissing,
+    summary: `${scheduleSummary} Auto-assigned ${refereeAssigned} team referees${refereeMissing ? `; ${refereeMissing} matches need a referee` : ''}.`,
   });
 }
 
@@ -257,7 +382,7 @@ export async function validateScheduleEdit(env: Env, matchId: string, input: Rec
   const current = context.matches.find(item => item.id === matchId);
   if (!current) throw new ApiError(404, 'Match not found');
   const fields = ['scheduled_on', 'starts_at', 'court_id'];
-  const hasAny = fields.some(field => Object.hasOwn(input, field));
+  const hasAny = [...fields, 'home_division_team_id', 'away_division_team_id', 'referee'].some(field => Object.hasOwn(input, field));
   if (!hasAny) return { issue: undefined, warning: undefined, court: undefined, warnings: [] as string[] };
   if (current.status !== 'scheduled' || current.home_score !== null || current.away_score !== null) {
     throw new ApiError(409, 'A match cannot be rescheduled after it starts or a result is recorded.');
@@ -295,7 +420,11 @@ export async function validateScheduleEdit(env: Env, matchId: string, input: Rec
   }
 
   const candidateStart = absoluteMinute(dayValue, start); const duration = playingDuration(context.settings);
-  const candidate: Interval = { match_id: matchId, start: candidateStart, end: candidateStart + duration, teamIds: teamsFor(current), courtId: court.id };
+  const candidateMatch = { ...current,
+    home_division_team_id: Object.hasOwn(input, 'home_division_team_id') ? input.home_division_team_id as string | null : current.home_division_team_id,
+    away_division_team_id: Object.hasOwn(input, 'away_division_team_id') ? input.away_division_team_id as string | null : current.away_division_team_id,
+  };
+  const candidate: Interval = { match_id: matchId, start: candidateStart, end: candidateStart + duration, teamIds: teamsFor(candidateMatch), courtId: court.id };
   const otherIntervals = currentIntervals(context, matchId);
   const gap = context.settings.gap_between_games_minutes;
   if (otherIntervals.some(other => other.courtId === court.id && courtConflict(candidate.start, duration, other, gap))) {
@@ -310,6 +439,25 @@ export async function validateScheduleEdit(env: Env, matchId: string, input: Rec
     if (!teamTurnaroundConflict(candidate.start, duration, other, turnaround)) continue;
     const rest = Math.max(0, candidate.start >= other.start ? candidate.start - other.end : other.start - candidate.end);
     warnings.push(`A team would have ${rest} minutes between matches; the configured minimum is ${turnaround} minutes.`);
+  }
+  const refereeValue = typeof input.referee === 'string' ? input.referee.trim() : current.referee?.trim() || '';
+  if (refereeValue) {
+    const key = refereeValue.toLocaleLowerCase();
+    const refereeTeam = context.teamEntries.find(team => {
+      const label = refereeTeamLabel(team).toLocaleLowerCase();
+      return label === key || team.name.toLocaleLowerCase() === key;
+    });
+    if (refereeTeam) {
+      if (candidate.teamIds.includes(refereeTeam.id)) warnings.push(`${refereeValue} is playing in this match and cannot referee it.`);
+      const refereeGame = otherIntervals.find(other => other.teamIds.includes(refereeTeam.id)
+        && candidate.start < other.end && other.start < candidate.end);
+      if (refereeGame) warnings.push(`${refereeValue} is scheduled to play during this referee duty.`);
+      const refereeDutyOverlap = context.matches.some(other => other.id !== matchId && other.referee?.trim().toLocaleLowerCase() === key
+        && other.scheduled_on && other.starts_at && validDate(other.scheduled_on) && validTime(other.starts_at)
+        && candidate.start < absoluteMinute(other.scheduled_on, minutesOf(other.starts_at)) + duration
+        && absoluteMinute(other.scheduled_on, minutesOf(other.starts_at)) < candidate.end);
+      if (refereeDutyOverlap) warnings.push(`${refereeValue} is already assigned to referee another match at this time.`);
+    }
   }
   const uniqueWarnings = [...new Set(warnings)];
   if (uniqueWarnings.length && !confirmWarnings) return { issue: null, warning: uniqueWarnings.join(' '), court: court.display_name, warnings: uniqueWarnings };

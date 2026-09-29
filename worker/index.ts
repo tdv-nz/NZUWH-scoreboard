@@ -356,7 +356,8 @@ export default {
         const input = await body(request);
         if (user.role === 'scorer' && Object.keys(input).some(key => !['home_score','away_score','status'].includes(key))) throw new ApiError(403, 'Only admins can change fixtures');
         const matchId = uuid(path.slice('/api/matches/'.length), 'match');
-        if (user.role === 'admin' && ['scheduled_on','starts_at','court_id'].some(key => Object.hasOwn(input, key))) {
+        const fixtureFields = ['scheduled_on','starts_at','court_id','home_division_team_id','away_division_team_id','referee'];
+        if (user.role === 'admin' && fixtureFields.some(key => Object.hasOwn(input, key))) {
           const { confirm_warnings, ...changes } = input;
           if (confirm_warnings !== undefined && typeof confirm_warnings !== 'boolean') throw new ApiError(400, 'Invalid warning confirmation');
           const validation = await validateScheduleEdit(env, matchId, changes, confirm_warnings === true);
@@ -364,11 +365,22 @@ export default {
             return json({ error: 'Confirm these scheduling warnings before saving.', warnings: validation.warnings, requires_confirmation: true }, 409);
           }
           if (validation.court !== undefined) changes.court = validation.court;
-          return await update(env, 'matches', matchId, changes, { issue: validation.issue ?? null, warning: validation.warning ?? null });
+          const response = await update(env, 'matches', matchId, changes, { issue: validation.issue ?? null, warning: validation.warning ?? null });
+          if (['scheduled_on','starts_at','court_id'].some(key => Object.hasOwn(changes, key))) {
+            await q(env, `UPDATE matches SET schedule_manually_adjusted=CASE
+              WHEN scheduled_on IS NOT NULL AND starts_at IS NOT NULL AND court_id IS NOT NULL THEN 1 ELSE 0 END WHERE id=?`, matchId).run();
+          }
+          return response;
         }
         return await update(env, 'matches', matchId, input);
       }
       requireAdmin(user);
+      const returnToAutoSchedule = path.match(/^\/api\/matches\/([0-9a-f-]+)\/schedule-auto$/);
+      if (request.method === 'POST' && returnToAutoSchedule) {
+        const result = await q(env, 'UPDATE matches SET schedule_manually_adjusted=0,updated_at=CURRENT_TIMESTAMP WHERE id=?', uuid(returnToAutoSchedule[1], 'match')).run();
+        if (!result.meta.changes) throw new ApiError(404, 'Match not found');
+        return json({ ok: true });
+      }
       const schedule = path.match(/^\/api\/tournaments\/([0-9a-f-]+)\/schedule\/generate$/);
       if (request.method === 'POST' && schedule) return await generateSchedule(env, uuid(schedule[1], 'tournament'));
       const courtRules = path.match(/^\/api\/divisions\/([0-9a-f-]+)\/court-rules$/);
