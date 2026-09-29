@@ -20,6 +20,51 @@ type Attendance = { match_id: string; player_id: string };
 type Goal = { id: string; match_id: string; player_id: string | null; division_team_id: string };
 type Match = { id: string; division_id: string; stage: string; round_number: number | null; match_number: number | null; scheduled_on: string | null; starts_at: string | null; court_id: string | null; court: string | null; referee: string | null; home_division_team_id: string | null; away_division_team_id: string | null; home_placeholder: string | null; away_placeholder: string | null; home_score: number | null; away_score: number | null; status: string; schedule_issue: string | null; schedule_warning: string | null };
 
+function TournamentDrawSheet({ tournament, matches, divisions, courts, days, entries, teams }: {
+  tournament: Tournament; matches: Match[]; divisions: Division[]; courts: Court[]; days: TournamentDay[]; entries: Entry[]; teams: Team[];
+}) {
+  const activeCourts = courts.filter(court => court.tournament_id === tournament.id && court.active).sort((a, b) => a.display_order - b.display_order);
+  const dates = [...new Set([
+    ...days.filter(day => day.tournament_id === tournament.id && day.available).map(day => day.day_on),
+    ...matches.map(match => match.scheduled_on).filter((day): day is string => !!day),
+  ])].sort();
+  const unscheduled = matches.filter(match => !match.scheduled_on || !match.starts_at || (!match.court_id && !match.court));
+  const divisionName = (id: string) => divisions.find(division => division.id === id)?.name || 'Division';
+  const teamForEntry = (id: string | null, placeholder: string | null) => {
+    if (!id) return placeholder || 'TBC';
+    return teams.find(team => team.id === entries.find(entry => entry.id === id)?.team_id)?.name || placeholder || 'TBC';
+  };
+  const entryColour = (id: string | null) => id ? entries.find(entry => entry.id === id)?.team_colour || teams.find(team => team.id === entries.find(entry => entry.id === id)?.team_id)?.colour || '#94a3b8' : '#94a3b8';
+  const dayLabel = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const groupEntries = divisions.filter(division => division.tournament_id === tournament.id).flatMap(division => {
+    const divisionEntries = entries.filter(entry => entry.division_id === division.id);
+    const groups = division.group_count === 2 ? ['A', 'B'] : ['A'];
+    return groups.map(group => ({
+      key: `${division.id}-${group}`,
+      label: division.group_count === 2 ? `${division.name} · Pool ${group}` : division.name,
+      entries: divisionEntries.filter(entry => (entry.group_name || 'A') === group)
+        .sort((a, b) => (a.seed || Number.MAX_SAFE_INTEGER) - (b.seed || Number.MAX_SAFE_INTEGER) || teamForEntry(a.id, '').localeCompare(teamForEntry(b.id, ''))),
+    })).filter(group => group.entries.length);
+  });
+
+  return <div className="tournament-draw-sheet">
+    <header className="draw-sheet-header"><div><span>Underwater Hockey New Zealand · Tournament draw</span><h2>{tournament.name}</h2><p>{tournament.starts_on} – {tournament.ends_on}{tournament.venue ? ` · ${tournament.venue}` : ''}</p></div><span className="draw-version">Generated draw</span></header>
+    {dates.map(day => <section className="draw-day" key={day}>
+      <h3>{dayLabel(day)}</h3>
+      {activeCourts.length ? <div className="draw-court-grid">{activeCourts.map(court => {
+        const games = matches.filter(match => match.scheduled_on === day && match.starts_at && (match.court_id === court.id || (!match.court_id && match.court?.toLocaleLowerCase() === court.display_name.toLocaleLowerCase())))
+          .sort((a, b) => (a.starts_at || '').localeCompare(b.starts_at || '') || (a.match_number || 0) - (b.match_number || 0));
+        return <section className="draw-court" key={court.id}><h4>{court.display_name}</h4><table><colgroup><col className="draw-col-time"/><col className="draw-col-game"/><col className="draw-col-grade"/><col className="draw-col-team"/><col className="draw-col-score"/><col className="draw-col-team"/><col className="draw-col-score"/><col className="draw-col-ref"/><col className="draw-col-comment"/></colgroup><thead><tr><th>Time</th><th>Game</th><th>Grade</th><th>White</th><th>Score</th><th>Black</th><th>Score</th><th>Refs</th><th>Comments</th></tr></thead><tbody>{games.length ? games.map(match => <tr key={match.id} className={`draw-game status-${match.status}`}><td>{match.starts_at?.slice(0, 5)}</td><td>{match.match_number || '—'}</td><td>{divisionName(match.division_id)}</td><td className="draw-team" style={{ borderLeftColor: entryColour(match.home_division_team_id) }}>{teamForEntry(match.home_division_team_id, match.home_placeholder)}</td><td>{match.home_score ?? ''}</td><td className="draw-team" style={{ borderLeftColor: entryColour(match.away_division_team_id) }}>{teamForEntry(match.away_division_team_id, match.away_placeholder)}</td><td>{match.away_score ?? ''}</td><td>{match.referee || ''}</td><td>{match.schedule_issue || match.schedule_warning || ''}</td></tr>) : <tr><td colSpan={9} className="draw-no-games">No games scheduled on this court.</td></tr>}</tbody></table></section>;
+      })}</div> : <p className="hint">Add an active court to display the draw.</p>}
+    </section>)}
+    {!!unscheduled.length && <section className="draw-unscheduled"><h3>Fixtures to schedule</h3><table><thead><tr><th>Game</th><th>Grade</th><th>White</th><th>Black</th><th>Schedule note</th></tr></thead><tbody>{unscheduled.map(match => <tr key={match.id}><td>{match.match_number || '—'}</td><td>{divisionName(match.division_id)}</td><td>{teamForEntry(match.home_division_team_id, match.home_placeholder)}</td><td>{teamForEntry(match.away_division_team_id, match.away_placeholder)}</td><td>{match.schedule_issue || 'Date, time, or court not assigned'}</td></tr>)}</tbody></table></section>}
+    {!!groupEntries.length && <section className="draw-team-index"><h3>Teams by pool</h3><div className="draw-team-grid">{groupEntries.map(group => <section className="draw-team-group" key={group.key}><h4>{group.label}</h4><table><tbody>{group.entries.map((entry, index) => {
+      const team = teams.find(item => item.id === entries.find(row => row.id === entry.id)?.team_id);
+      return <tr key={entry.id}><td className="draw-team" style={{ borderLeftColor: entryColour(entry.id) }}>{entry.seed || index + 1}. {team?.name || 'Team'}</td><td>{team?.organisation || '—'}</td></tr>;
+    })}</tbody></table></section>)}</div></section>}
+  </div>;
+}
+
 function ScoringMatchCard({ match, divisionName, homeName, awayName, homeColour, awayColour, court, busy, extra, onUpdate }: {
   match: Match; divisionName: string; homeName: string; awayName: string; homeColour: string; awayColour: string;
   court: string; busy: boolean; extra: ReactNode; onUpdate: (change: Partial<Match>) => Promise<void>;
@@ -129,6 +174,7 @@ export default function App() {
   const [attendance, setAttendance] = useState<Attendance[]>([]); const [goals, setGoals] = useState<Goal[]>([]);
   const [selectedTournament, setSelectedTournament] = useState(''); const [selectedDivision, setSelectedDivision] = useState('');
   const [tab, setTab] = useState<'overview' | 'teams' | 'players' | 'scoring' | 'draw' | 'standings' | 'schedule'>('overview');
+  const [scheduleView, setScheduleView] = useState<'draw' | 'table'>('draw');
   const [scoreStatus, setScoreStatus] = useState('all'); const [scoreDivision, setScoreDivision] = useState('');
   const [scoreCourt, setScoreCourt] = useState(''); const [scoreDay, setScoreDay] = useState(''); const [scoreSearch, setScoreSearch] = useState('');
   const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false); const [showSetup, setShowSetup] = useState(false); const [showSignIn, setShowSignIn] = useState(false);
@@ -388,7 +434,19 @@ export default function App() {
             </article>)}</div>{!divisionMatches.length && <p className="empty">No fixtures yet.</p>}
           </section>}
           {tab === 'standings' && <section className="panel"><h3>Pool standings</h3><div className="tablewrap"><table><thead><tr><th>Pool</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th></tr></thead><tbody>{rows.map(row => <tr key={row.entry.id}><td>{row.entry.group_name || 'A'}</td><td><i className="swatch" style={{ background: teamColour(row.entry.id) }}/>{teamName(row.entry.id)}</td><td>{row.played}</td><td>{row.wins}</td><td>{row.draws}</td><td>{row.losses}</td><td>{row.goalsFor}</td><td>{row.goalsAgainst}</td><td>{row.goalsFor - row.goalsAgainst}</td><td><strong>{row.points}</strong></td></tr>)}</tbody></table></div><p className="hint">Teams are sorted by points, goal difference, then goals scored. Organisers can enter seeded knockout fixtures in Draw.</p></section>}
-          {tab === 'schedule' && <section className="panel schedule"><div className="sectiontitle"><div><h3>Full tournament schedule</h3><p>All divisions, ordered by day, time and court.</p><p className="schedule-summary">{scheduledCount} scheduled · {unscheduledCount} unscheduled{tournamentMatches.some(match => match.schedule_warning) ? ` · ${tournamentMatches.filter(match => match.schedule_warning).length} fallback or warning` : ''}</p></div><div className="schedule-actions">{isAdmin && <button disabled={busy || (scheduleHasResults ? !pendingScheduleCount : !tournamentMatches.length)} onClick={generateSchedule}>{scheduleHasResults ? 'Schedule unscheduled fixtures' : scheduledCount ? 'Rebuild schedule' : 'Generate schedule'}</button>}<button onClick={() => window.print()}>Print</button><button onClick={exportSchedule}>Export CSV</button></div></div>{isAdmin && scheduleHasResults && <p className="hint">Rebuilding the existing schedule is locked after play starts; newly added unscheduled fixtures can still be placed.</p>}<div className="tablewrap"><table><thead><tr><th>Date</th><th>Time</th><th>Court</th><th>Game</th><th>Division</th><th>Stage</th><th>White</th><th>Score</th><th>Black</th><th>Score</th><th>Referee</th><th>Schedule notes</th></tr></thead><tbody>{tournamentMatches.map(match => <tr key={match.id}><td>{match.scheduled_on || '—'}</td><td>{match.starts_at?.slice(0, 5) || '—'}</td><td>{courtName(match.court_id, match.court)}</td><td>{match.match_number || '—'}</td><td>{divisions.find(d => d.id === match.division_id)?.name}</td><td>{match.stage.replace('_', ' ')}</td><td>{teamName(match.home_division_team_id) === 'TBC' ? match.home_placeholder || 'TBC' : teamName(match.home_division_team_id)}</td><td>{match.home_score ?? ''}</td><td>{teamName(match.away_division_team_id) === 'TBC' ? match.away_placeholder || 'TBC' : teamName(match.away_division_team_id)}</td><td>{match.away_score ?? ''}</td><td>{match.referee || '—'}</td><td>{match.schedule_issue || match.schedule_warning || '—'}</td></tr>)}</tbody></table></div></section>}
+          {tab === 'schedule' && <section className="panel schedule">
+            <div className="sectiontitle"><div><h3>Tournament draw</h3><p>All divisions, grouped by playing day and court.</p><p className="schedule-summary">{scheduledCount} scheduled · {unscheduledCount} unscheduled{tournamentMatches.some(match => match.schedule_warning) ? ` · ${tournamentMatches.filter(match => match.schedule_warning).length} fallback or warning` : ''}</p></div>
+              <div className="schedule-actions">
+                <button className="draw-primary-action" onClick={() => window.print()}>Print draw</button>
+                {isAdmin && <button disabled={busy || (scheduleHasResults ? !pendingScheduleCount : !tournamentMatches.length)} onClick={generateSchedule}>{scheduleHasResults ? 'Schedule unscheduled fixtures' : scheduledCount ? 'Rebuild schedule' : 'Generate schedule'}</button>}
+                <button onClick={exportSchedule}>Export CSV</button>
+              </div>
+            </div>
+            {isAdmin && scheduleHasResults && <p className="hint">Rebuilding the existing schedule is locked after play starts; newly added unscheduled fixtures can still be placed.</p>}
+            <div className="schedule-view-toggle" role="group" aria-label="Schedule display"><button type="button" className={scheduleView === 'draw' ? 'active' : ''} onClick={() => setScheduleView('draw')}>Draw view</button><button type="button" className={scheduleView === 'table' ? 'active' : ''} onClick={() => setScheduleView('table')}>Table view</button></div>
+            <div className={scheduleView === 'table' ? 'draw-screen-hidden' : ''}><TournamentDrawSheet tournament={tournament} matches={tournamentMatches} divisions={divisions} courts={courts} days={tournamentDays} entries={entries} teams={teams}/></div>
+            {scheduleView === 'table' && <div className="tablewrap"><table><thead><tr><th>Date</th><th>Time</th><th>Court</th><th>Game</th><th>Division</th><th>Stage</th><th>White</th><th>Score</th><th>Black</th><th>Score</th><th>Referee</th><th>Schedule notes</th></tr></thead><tbody>{tournamentMatches.map(match => <tr key={match.id}><td>{match.scheduled_on || '—'}</td><td>{match.starts_at?.slice(0, 5) || '—'}</td><td>{courtName(match.court_id, match.court)}</td><td>{match.match_number || '—'}</td><td>{divisions.find(d => d.id === match.division_id)?.name}</td><td>{match.stage.replace('_', ' ')}</td><td>{teamName(match.home_division_team_id) === 'TBC' ? match.home_placeholder || 'TBC' : teamName(match.home_division_team_id)}</td><td>{match.home_score ?? ''}</td><td>{teamName(match.away_division_team_id) === 'TBC' ? match.away_placeholder || 'TBC' : teamName(match.away_division_team_id)}</td><td>{match.away_score ?? ''}</td><td>{match.referee || '—'}</td><td>{match.schedule_issue || match.schedule_warning || '—'}</td></tr>)}</tbody></table></div>}
+          </section>}
         </>}
       </> : <section className="panel empty">No tournaments yet. An admin can create the first championship above.</section>}
     </main>
